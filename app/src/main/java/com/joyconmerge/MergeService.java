@@ -127,13 +127,20 @@ public class MergeService extends Service {
         merging = false;
         stopForeground(true);
         stopSelf();
+        notifyStatus("STOPPED"); // BUG FIX #1: notify UI so button updates immediately
     }
 
     private void killRootProcess() {
         if (rootProcess != null) {
             try {
-                rootProcess.getOutputStream().close();
-            } catch (IOException ignored) {}
+                // BUG FIX #2: send "exit" so root shell kills its forked children
+                // (the cat eventL / cat eventR processes) before we SIGKILL.
+                // Without this, those children keep /dev/input/event* open and
+                // the next scan cannot re-open the devices until BT reconnects.
+                rootProcess.getOutputStream().write("exit\n".getBytes());
+                rootProcess.getOutputStream().flush();
+                Thread.sleep(350); // give children time to be reaped
+            } catch (Exception ignored) {}
             rootProcess.destroy();
             rootProcess = null;
         }

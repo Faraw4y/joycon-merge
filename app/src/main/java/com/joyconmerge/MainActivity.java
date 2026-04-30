@@ -63,6 +63,10 @@ public class MainActivity extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((MergeService.LocalBinder) binder).getService();
             bound = true;
+            // BUG FIX #4: push saved config immediately so that if the service
+            // auto-restarted (START_STICKY on BT connect) it has the correct
+            // button/axis mappings — not the JNI defaults.
+            applyConfigToService();
             service.setStatusCallback(new MergeService.StatusCallback() {
                 @Override public void onStatus(String msg) {
                     runOnUiThread(() -> handleStatus(msg));

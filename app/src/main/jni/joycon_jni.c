@@ -68,6 +68,17 @@ static pthread_t thread_left, thread_right;
 static int dp_up=0, dp_down=0, dp_left=0, dp_right=0;
 static pthread_mutex_t dpad_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+ * BUG FIX #3: Per-axis hysteresis state.
+ * A sharp flat-boundary deadzone causes flickering when the stick idles
+ * right at the threshold — one sample passes, the next is blocked → 0,
+ * causing the "center/edge alternating" effect.
+ * Hysteresis uses two thresholds: enter deadzone only when clearly below
+ * 75% of flat, exit only when clearly above 100% of flat.
+ */
+static int lx_active = 0, ly_active = 0;
+static int rx_active = 0, ry_active = 0;
+
 static JavaVM    *jvm        = NULL;
 static jobject    g_callback  = NULL;
 static jmethodID  g_onStatus  = NULL;
@@ -120,10 +131,34 @@ static void emit(int type, int code, int value) {
 
 static int clamp(int v, int mn, int mx) { return v<mn?mn:v>mx?mx:v; }
 
-/* Software deadzone: if |v| <= flat, output 0. Also apply fuzz rounding. */
-static int apply_deadzone(int v) {
-    if (v > -cfg.stick_flat && v < cfg.stick_flat) return 0;
-    /* Round to fuzz bucket */
+/*
+ * BUG FIX #3: Hysteresis deadzone.
+ *
+ * *active tracks whether this axis is currently considered "outside" the
+ * deadzone. Two thresholds:
+ *   enter threshold = stick_flat        (must exceed to leave deadzone)
+ *   exit  threshold = stick_flat * 3/4  (must drop below to re-enter deadzone)
+ *
+ * This prevents the oscillation that happens when the stick rests exactly
+ * on the boundary of a sharp single-threshold deadzone.
+ */
+static int apply_deadzone_hyst(int v, int *active) {
+    int enter = cfg.stick_flat;
+    int exit_dz = cfg.stick_flat * 3 / 4;
+    if (*active) {
+        /* Currently outside deadzone — snap back only when clearly centered */
+        if (v > -exit_dz && v < exit_dz) {
+            *active = 0;
+            return 0;
+        }
+    } else {
+        /* Inside deadzone — exit only when clearly pushed */
+        if (v <= -enter || v >= enter) {
+            *active = 1;
+        } else {
+            return 0;
+        }
+    }
     if (cfg.stick_fuzz > 1) v = (v / cfg.stick_fuzz) * cfg.stick_fuzz;
     return clamp(v, -32768, 32767);
 }
@@ -162,10 +197,10 @@ static void handle_left(struct input_event *ev) {
         int v = ev->value;
         if      (ev->code == cfg.left_axis_x) {
             if (cfg.inv_lx) v = -v;
-            emit(EV_ABS, ABS_X, apply_deadzone(v));
+            emit(EV_ABS, ABS_X, apply_deadzone_hyst(v, &lx_active));
         } else if (ev->code == cfg.left_axis_y) {
             if (cfg.inv_ly) v = -v;
-            emit(EV_ABS, ABS_Y, apply_deadzone(v));
+            emit(EV_ABS, ABS_Y, apply_deadzone_hyst(v, &ly_active));
         } else if (ev->code == ABS_HAT0X) {
             emit(EV_ABS, ABS_HAT0X, v);
         } else if (ev->code == ABS_HAT0Y) {
@@ -194,10 +229,10 @@ static void handle_right(struct input_event *ev) {
          * this is the right-thread, so we remap to ABS_RX/ABS_RY on the virtual device. */
         if      (ev->code == cfg.right_axis_x) {
             if (cfg.inv_rx) v = -v;
-            emit(EV_ABS, ABS_RX, apply_deadzone(v));
+            emit(EV_ABS, ABS_RX, apply_deadzone_hyst(v, &rx_active));
         } else if (ev->code == cfg.right_axis_y) {
             if (cfg.inv_ry) v = -v;
-            emit(EV_ABS, ABS_RY, apply_deadzone(v));
+            emit(EV_ABS, ABS_RY, apply_deadzone_hyst(v, &ry_active));
         }
     } else if (ev->type == EV_SYN) {
         emit(EV_SYN, SYN_REPORT, 0);
@@ -299,6 +334,8 @@ Java_com_joyconmerge_MergeService_stopMerge(JNIEnv *env, jobject thiz) {
     if (left_fd >= 0)        { close(left_fd);        left_fd        = -1; }
     if (right_fd >= 0)       { close(right_fd);       right_fd       = -1; }
     if (uinput_pipe_fd >= 0) { close(uinput_pipe_fd); uinput_pipe_fd = -1; }
+    /* BUG FIX #3: reset hysteresis state so next session starts clean */
+    lx_active = ly_active = rx_active = ry_active = 0;
     notify_status("STOPPED");
 }
 
