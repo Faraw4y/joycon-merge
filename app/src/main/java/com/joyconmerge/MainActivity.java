@@ -1,15 +1,23 @@
 package com.joyconmerge;
 
+import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.View;
 import android.widget.*;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import com.google.android.material.tabs.TabLayout;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -47,6 +55,9 @@ public class MainActivity extends AppCompatActivity {
         0x13b, 0x13a, 0x13c, 0x13d
     };
 
+    // Permission launcher
+    private ActivityResultLauncher<String[]> permissionLauncher;
+
     private final ServiceConnection conn = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -68,6 +79,25 @@ public class MainActivity extends AppCompatActivity {
         setupTabs();
         setupRemap();
         setupCalibrate();
+
+        // Register permission launcher
+        permissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
+            results -> {
+                boolean allGranted = true;
+                for (Boolean granted : results.values()) {
+                    if (!granted) { allGranted = false; break; }
+                }
+                if (allGranted) {
+                    doStartMerge();
+                } else {
+                    Toast.makeText(this,
+                        "Bluetooth permissions required to start merge",
+                        Toast.LENGTH_LONG).show();
+                }
+            }
+        );
+
         bindService(new Intent(this, MergeService.class), conn, Context.BIND_AUTO_CREATE);
     }
 
@@ -132,7 +162,6 @@ public class MainActivity extends AppCompatActivity {
             ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             sp.setAdapter(ad);
         }
-        /* Set saved selections */
         spA.setSelection(codeToIdx(config.getMapA()));
         spB.setSelection(codeToIdx(config.getMapB()));
         spX.setSelection(codeToIdx(config.getMapX()));
@@ -167,13 +196,40 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void toggleMerge() {
-        Intent intent = new Intent(this, MergeService.class);
         if (bound && service.isMerging()) {
+            // Stop
+            Intent intent = new Intent(this, MergeService.class);
             intent.setAction(MergeService.ACTION_STOP);
+            startForegroundService(intent);
         } else {
-            applyConfigToService();
-            intent.setAction(MergeService.ACTION_START);
+            // Check & request Bluetooth permissions before starting
+            checkPermissionsAndStart();
         }
+    }
+
+    private void checkPermissionsAndStart() {
+        List<String> needed = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+                    != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.BLUETOOTH_SCAN);
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.BLUETOOTH_CONNECT);
+            }
+        }
+        if (needed.isEmpty()) {
+            doStartMerge();
+        } else {
+            permissionLauncher.launch(needed.toArray(new String[0]));
+        }
+    }
+
+    private void doStartMerge() {
+        applyConfigToService();
+        Intent intent = new Intent(this, MergeService.class);
+        intent.setAction(MergeService.ACTION_START);
         startForegroundService(intent);
     }
 
@@ -245,7 +301,6 @@ public class MainActivity extends AppCompatActivity {
             if (devs != null && !devs.equals("|")) tvDevices.setText(devs.replace("|", "\n"));
         }
         updateToggleButton();
-        /* Live test tab */
         tvTestOutput.setText(tvTestOutput.getText() + "\n" + msg);
     }
 
