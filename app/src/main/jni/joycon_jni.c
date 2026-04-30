@@ -49,7 +49,7 @@ typedef struct {
 static Config cfg = {
     .stick_fuzz=256, .stick_flat=4096,
     .left_axis_x=0,  .left_axis_y=1,
-    .right_axis_x=0, .right_axis_y=1,   /* Joy-Con R sends stick as ABS_X/ABS_Y */
+    .right_axis_x=3, .right_axis_y=4,   /* Joy-Con R sends stick as ABS_RX(3)/ABS_RY(4) */
     .code_a=304, .map_a=0x130, .code_b=305, .map_b=0x131,
     .code_x=307, .map_x=0x133, .code_y=308, .map_y=0x134,
     .code_r=0x136, .map_r=0x136, .code_zr=0x137, .map_zr=0x137,
@@ -174,6 +174,7 @@ static void handle_dpad(int code, int value) {
     pthread_mutex_unlock(&dpad_mutex);
     emit(EV_ABS, ABS_HAT0X, hx);
     emit(EV_ABS, ABS_HAT0Y, hy);
+    emit(EV_SYN, SYN_REPORT, 0);  /* flush hat update immediately */
 }
 
 static void handle_left(struct input_event *ev) {
@@ -225,8 +226,14 @@ static void handle_right(struct input_event *ev) {
         else if (c == cfg.code_r3)   { emit(EV_KEY, cfg.map_r3,   v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] R3 pressed");   notify_event(ebuf); } }
     } else if (ev->type == EV_ABS) {
         int v = ev->value;
-        /* Joy-Con R sends its stick as ABS_X(0)/ABS_Y(1), same as Left — handled here because
-         * this is the right-thread, so we remap to ABS_RX/ABS_RY on the virtual device. */
+        /*
+         * Joy-Con R on this device sends ABS_RX(3)/ABS_RY(4).
+         * The raw range from getevent is 0x0000~0x7FFF (0~32767) for one
+         * direction and 0xFFFFxxxx (large unsigned = negative signed 32-bit)
+         * for the other — i.e. it IS already a signed 32-bit value centered
+         * near 0, same as -32768~32767.  No re-centering needed; just apply
+         * deadzone and remap to ABS_RX/ABS_RY on the virtual device.
+         */
         if      (ev->code == cfg.right_axis_x) {
             if (cfg.inv_rx) v = -v;
             emit(EV_ABS, ABS_RX, apply_deadzone_hyst(v, &rx_active));

@@ -257,7 +257,7 @@ public class MainActivity extends AppCompatActivity {
             config.getFuzz(), config.getFlat(),
             config.getInvLX()?1:0, config.getInvLY()?1:0,
             config.getInvRX()?1:0, config.getInvRY()?1:0,
-            0, 1, 0, 1,   /* Left stick: ABS_X/Y=0/1, Right stick raw also 0/1 on Joy-Con R */
+            0, 1, 3, 4,   /* Left stick: ABS_X/Y=0/1, Right Joy-Con sends ABS_RX/RY=3/4 */
             config.getCodeA(), config.getMapA(),
             config.getCodeB(), config.getMapB(),
             config.getCodeX(), config.getMapX(),
