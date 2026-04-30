@@ -1,21 +1,15 @@
 /*
- * uinput_setup — binary standalone yang di-bundle dalam APK
+ * joycon_merge — standalone root binary, bundled in APK assets.
  *
- * Dijalankan oleh root shell dengan args:
- *   uinput_setup <left_path> <right_path> <target_pid> <left_wfd> <right_wfd> <uinput_rfd>
+ * Arsitektur v6: binary ini handle SEMUA logika merge langsung,
+ * persis seperti versi Termux yang sudah terbukti bekerja.
+ * Tidak ada JNI, tidak ada event pipe, tidak ada race condition.
  *
- * Yang dilakukan:
- *   1. Buka /dev/uinput (root bisa)
- *   2. Setup semua ioctl (UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_ABSBIT)
- *   3. Write struct uinput_user_dev
- *   4. UI_DEV_CREATE
- *   5. Print "UINPUT_READY\n" ke stdout  ← sinyal ke Java
- *   6. Fork dua proses: cat eventL → pipe, cat eventR → pipe
- *   7. Loop baca dari uinput_rfd pipe (event dari JNI), tulis ke uinput_fd
- *      Ini adalah forward loop yang berjalan sampai pipe ditutup.
- *   8. UI_DEV_DESTROY dan exit
- *
- * Tidak ada dependensi eksternal — hanya libc yang selalu ada di Android.
+ * Java:
+ *   1. Jalankan binary via su: uinput_setup <left> <right> [args...]
+ *   2. Baca stdout: "UINPUT_READY\n" = sukses, "ERROR:...\n" = gagal
+ *   3. Kirim "STOP\n" ke stdin untuk menghentikan
+ *   4. Baca "STATUS:STOPPED\n" sebagai konfirmasi berhenti
  */
 
 #include <stdio.h>
@@ -24,161 +18,255 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/ioctl.h>
-#include <sys/wait.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
 
-#define VIRT_NAME  "Nintendo Switch Combined Joy-Con"
-#define VENDOR_ID  0x057e
-#define PRODUCT_ID 0x2009
+#define VIRT_NAME   "Nintendo Switch Combined Joy-Con"
+#define VENDOR_ID   0x057e
+#define PRODUCT_ID  0x2009
 
-/* ABS indices yang kita gunakan */
-#define MY_ABS_X     0
-#define MY_ABS_Y     1
-#define MY_ABS_RX    3
-#define MY_ABS_RY    4
-#define MY_ABS_HAT0X 16
-#define MY_ABS_HAT0Y 17
+static int stick_fuzz = 256;
+static int stick_flat = 4096;
+static int inv_lx=0, inv_ly=0, inv_rx=0, inv_ry=0;
+static int map_a=0x130, map_b=0x131, map_x=0x133, map_y=0x134;
+static int map_r=0x136, map_zr=0x137, map_plus=0x13b, map_r3=0x13d;
+static int map_l=0x135, map_zl=0x139, map_minus=0x13a, map_l3=0x13c;
 
-static void die(const char *msg) {
-    fprintf(stdout, "ERROR: %s: %s\n", msg, strerror(errno));
-    fflush(stdout);
-    exit(1);
+static int uinput_fd = -1;
+static int left_fd   = -1;
+static int right_fd  = -1;
+static volatile int running = 0;
+
+/* Mutex: prevents two threads writing simultaneously to uinput_fd */
+static pthread_mutex_t emit_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t dpad_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int dp_up=0, dp_down=0, dp_left=0, dp_right=0;
+
+static void emit(int type, int code, int value)
+{
+    struct input_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = type; ev.code = code; ev.value = value;
+    pthread_mutex_lock(&emit_mutex);
+    write(uinput_fd, &ev, sizeof(ev));
+    pthread_mutex_unlock(&emit_mutex);
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 7) {
-        fprintf(stdout, "ERROR: usage: uinput_setup left right pid lwfd rwfd urfd\n");
-        fflush(stdout);
-        return 1;
+static int clamp(int v, int mn, int mx) { return v<mn?mn:v>mx?mx:v; }
+
+static int apply_deadzone(int v) {
+    if (v > -stick_flat && v < stick_flat) return 0;
+    if (stick_fuzz > 1) v = (v / stick_fuzz) * stick_fuzz;
+    return clamp(v, -32768, 32767);
+}
+
+static void handle_dpad(int code, int value)
+{
+    pthread_mutex_lock(&dpad_mutex);
+    if (code==544) dp_up    = value;
+    if (code==545) dp_down  = value;
+    if (code==546) dp_left  = value;
+    if (code==547) dp_right = value;
+    int hx = dp_right - dp_left;
+    int hy = dp_down  - dp_up;
+    pthread_mutex_unlock(&dpad_mutex);
+    emit(EV_ABS, ABS_HAT0X, hx);
+    emit(EV_ABS, ABS_HAT0Y, hy);
+    emit(EV_SYN, SYN_REPORT, 0);
+}
+
+static void handle_left(struct input_event *ev)
+{
+    if (ev->type == EV_KEY) {
+        int c=ev->code, v=ev->value;
+        if      (c==0x135) emit(EV_KEY, map_l,    v);
+        else if (c==0x139) emit(EV_KEY, map_zl,   v);
+        else if (c==0x13a) emit(EV_KEY, map_minus, v);
+        else if (c==0x13c) emit(EV_KEY, map_l3,   v);
+        else if (c==544||c==545||c==546||c==547) handle_dpad(c,v);
+    } else if (ev->type == EV_ABS) {
+        if (ev->code == 0) {
+            int v = ev->value; if (inv_lx) v=-v;
+            emit(EV_ABS, ABS_X, apply_deadzone(v));
+        } else if (ev->code == 1) {
+            int v = ev->value; if (inv_ly) v=-v;
+            emit(EV_ABS, ABS_Y, apply_deadzone(v));
+        }
+    } else if (ev->type == EV_SYN) {
+        emit(EV_SYN, SYN_REPORT, 0);
+    }
+}
+
+static void handle_right(struct input_event *ev)
+{
+    if (ev->type == EV_KEY) {
+        int c=ev->code, v=ev->value;
+        if      (c==304)   emit(EV_KEY, map_a,    v);
+        else if (c==305)   emit(EV_KEY, map_b,    v);
+        else if (c==307)   emit(EV_KEY, map_x,    v);
+        else if (c==308)   emit(EV_KEY, map_y,    v);
+        else if (c==0x136) emit(EV_KEY, map_r,    v);
+        else if (c==0x137) emit(EV_KEY, map_zr,   v);
+        else if (c==0x13b) emit(EV_KEY, map_plus, v);
+        else if (c==0x13d) emit(EV_KEY, map_r3,   v);
+    } else if (ev->type == EV_ABS) {
+        if (ev->code == 3) {
+            int v = ev->value; if (inv_rx) v=-v;
+            emit(EV_ABS, ABS_RX, apply_deadzone(v));
+        } else if (ev->code == 4) {
+            int v = ev->value; if (inv_ry) v=-v;
+            emit(EV_ABS, ABS_RY, apply_deadzone(v));
+        }
+    } else if (ev->type == EV_SYN) {
+        emit(EV_SYN, SYN_REPORT, 0);
+    }
+}
+
+static void *thread_left(void *arg)
+{
+    struct input_event ev;
+    fprintf(stdout,"STATUS:Left reader started\n"); fflush(stdout);
+    while (running && read(left_fd, &ev, sizeof(ev))==sizeof(ev))
+        handle_left(&ev);
+    fprintf(stdout,"STATUS:Left reader stopped\n"); fflush(stdout);
+    return NULL;
+}
+
+static void *thread_right(void *arg)
+{
+    struct input_event ev;
+    fprintf(stdout,"STATUS:Right reader started\n"); fflush(stdout);
+    while (running && read(right_fd, &ev, sizeof(ev))==sizeof(ev))
+        handle_right(&ev);
+    fprintf(stdout,"STATUS:Right reader stopped\n"); fflush(stdout);
+    return NULL;
+}
+
+static void sig_handler(int s) { running = 0; }
+
+int main(int argc, char *argv[])
+{
+    if (argc < 3) {
+        fprintf(stdout,"ERROR:usage: uinput_setup <left> <right> [fuzz flat invLX invLY invRX invRY mapA mapB mapX mapY mapR mapZR mapPlus mapR3 mapL mapZL mapMinus mapL3]\n");
+        fflush(stdout); return 1;
     }
 
     const char *left_path  = argv[1];
     const char *right_path = argv[2];
-    const char *target_pid = argv[3];
-    const char *left_wfd   = argv[4];
-    const char *right_wfd  = argv[5];
-    const char *uinput_rfd = argv[6];
+    if (argc>3)  stick_fuzz = atoi(argv[3]);
+    if (argc>4)  stick_flat = atoi(argv[4]);
+    if (argc>5)  inv_lx     = atoi(argv[5]);
+    if (argc>6)  inv_ly     = atoi(argv[6]);
+    if (argc>7)  inv_rx     = atoi(argv[7]);
+    if (argc>8)  inv_ry     = atoi(argv[8]);
+    if (argc>9)  map_a      = atoi(argv[9]);
+    if (argc>10) map_b      = atoi(argv[10]);
+    if (argc>11) map_x      = atoi(argv[11]);
+    if (argc>12) map_y      = atoi(argv[12]);
+    if (argc>13) map_r      = atoi(argv[13]);
+    if (argc>14) map_zr     = atoi(argv[14]);
+    if (argc>15) map_plus   = atoi(argv[15]);
+    if (argc>16) map_r3     = atoi(argv[16]);
+    if (argc>17) map_l      = atoi(argv[17]);
+    if (argc>18) map_zl     = atoi(argv[18]);
+    if (argc>19) map_minus  = atoi(argv[19]);
+    if (argc>20) map_l3     = atoi(argv[20]);
 
-    /* ---------- 1. Buka /dev/uinput ---------- */
-    int ufd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
-    if (ufd < 0) die("open /dev/uinput");
+    signal(SIGTERM, sig_handler);
+    signal(SIGINT,  sig_handler);
 
-    /* ---------- 2. Set event/key/abs bits ---------- */
-    if (ioctl(ufd, UI_SET_EVBIT, EV_KEY) < 0) die("UI_SET_EVBIT EV_KEY");
-    if (ioctl(ufd, UI_SET_EVBIT, EV_ABS) < 0) die("UI_SET_EVBIT EV_ABS");
-    if (ioctl(ufd, UI_SET_EVBIT, EV_SYN) < 0) die("UI_SET_EVBIT EV_SYN");
+    /* Setup uinput */
+    uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (uinput_fd < 0) {
+        fprintf(stdout,"ERROR:open /dev/uinput: %s\n",strerror(errno));
+        fflush(stdout); return 1;
+    }
 
-    /* Gamepad buttons standar Linux */
-    int keys[] = {0x130,0x131,0x132,0x133,0x134,0x135,0x136,
-                  0x137,0x138,0x139,0x13a,0x13b,0x13c,0x13d,0x13e};
-    for (int i = 0; i < 15; i++)
-        if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) die("UI_SET_KEYBIT");
+    ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY);
+    ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS);
+    ioctl(uinput_fd, UI_SET_EVBIT, EV_SYN);
 
-    int abits[] = {MY_ABS_X, MY_ABS_Y, MY_ABS_RX, MY_ABS_RY,
-                   MY_ABS_HAT0X, MY_ABS_HAT0Y};
-    for (int i = 0; i < 6; i++)
-        if (ioctl(ufd, UI_SET_ABSBIT, abits[i]) < 0) die("UI_SET_ABSBIT");
+    int keys[]={0x130,0x131,0x132,0x133,0x134,0x135,0x136,
+                0x137,0x138,0x139,0x13a,0x13b,0x13c,0x13d,0x13e};
+    for (int i=0;i<15;i++) ioctl(uinput_fd, UI_SET_KEYBIT, keys[i]);
+    int abits[]={ABS_X,ABS_Y,ABS_RX,ABS_RY,ABS_HAT0X,ABS_HAT0Y};
+    for (int i=0;i<6;i++) ioctl(uinput_fd, UI_SET_ABSBIT, abits[i]);
 
-    /* ---------- 3. Write struct uinput_user_dev ---------- */
     struct uinput_user_dev uidev;
     memset(&uidev, 0, sizeof(uidev));
     snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, VIRT_NAME);
-    uidev.id.bustype = BUS_VIRTUAL;
-    uidev.id.vendor  = VENDOR_ID;
-    uidev.id.product = PRODUCT_ID;
-    uidev.id.version = 1;
+    uidev.id.bustype=BUS_VIRTUAL; uidev.id.vendor=VENDOR_ID;
+    uidev.id.product=PRODUCT_ID;  uidev.id.version=1;
 
-    /* Stick axes */
-    int stick_axes[] = {MY_ABS_X, MY_ABS_Y, MY_ABS_RX, MY_ABS_RY};
-    for (int i = 0; i < 4; i++) {
-        int a = stick_axes[i];
-        uidev.absmax[a]  =  32767;
-        uidev.absmin[a]  = -32768;
-        uidev.absfuzz[a] = 256;
-        uidev.absflat[a] = 4096;
+    int sax[]={ABS_X,ABS_Y,ABS_RX,ABS_RY};
+    for (int i=0;i<4;i++) {
+        uidev.absmax[sax[i]]= 32767; uidev.absmin[sax[i]]=-32768;
+        uidev.absfuzz[sax[i]]=stick_fuzz; uidev.absflat[sax[i]]=stick_flat;
     }
-    /* D-pad axes */
-    uidev.absmax[MY_ABS_HAT0X] =  1; uidev.absmin[MY_ABS_HAT0X] = -1;
-    uidev.absmax[MY_ABS_HAT0Y] =  1; uidev.absmin[MY_ABS_HAT0Y] = -1;
+    uidev.absmax[ABS_HAT0X]=1; uidev.absmin[ABS_HAT0X]=-1;
+    uidev.absmax[ABS_HAT0Y]=1; uidev.absmin[ABS_HAT0Y]=-1;
 
-    /* Switch ke blocking mode sebelum write */
-    int flags = fcntl(ufd, F_GETFL);
-    fcntl(ufd, F_SETFL, flags & ~O_NONBLOCK);
+    int fl = fcntl(uinput_fd, F_GETFL);
+    fcntl(uinput_fd, F_SETFL, fl & ~O_NONBLOCK);
 
-    if (write(ufd, &uidev, sizeof(uidev)) < 0) die("write uinput_user_dev");
-
-    /* ---------- 4. UI_DEV_CREATE ---------- */
-    if (ioctl(ufd, UI_DEV_CREATE) < 0) die("UI_DEV_CREATE");
-
-    /* ---------- 5. Sinyal ke Java: setup OK ---------- */
-    fprintf(stdout, "UINPUT_READY\n");
-    fflush(stdout);
-
-    /* ---------- 6. Fork: cat left/right event ke pipe app ---------- */
-    /*
-     * Format path fd milik proses target: /proc/<pid>/fd/<fd>
-     * Root bisa buka fd milik proses lain via /proc.
-     */
-    char left_dst[64], right_dst[64], uinput_src[64];
-    snprintf(left_dst,   sizeof(left_dst),   "/proc/%s/fd/%s", target_pid, left_wfd);
-    snprintf(right_dst,  sizeof(right_dst),  "/proc/%s/fd/%s", target_pid, right_wfd);
-    snprintf(uinput_src, sizeof(uinput_src), "/proc/%s/fd/%s", target_pid, uinput_rfd);
-
-    /* Fork child untuk left Joy-Con */
-    pid_t pid_l = fork();
-    if (pid_l == 0) {
-        /* Child: buka left event device, copy ke pipe */
-        int src = open(left_path, O_RDONLY);
-        if (src < 0) { perror("open left"); exit(1); }
-        int dst = open(left_dst, O_WRONLY);
-        if (dst < 0) { perror("open left dst"); exit(1); }
-        char buf[4096];
-        ssize_t n;
-        while ((n = read(src, buf, sizeof(buf))) > 0)
-            write(dst, buf, n);
-        exit(0);
+    if (write(uinput_fd, &uidev, sizeof(uidev))<0) {
+        fprintf(stdout,"ERROR:write uidev: %s\n",strerror(errno));
+        fflush(stdout); return 1;
+    }
+    if (ioctl(uinput_fd, UI_DEV_CREATE)<0) {
+        fprintf(stdout,"ERROR:UI_DEV_CREATE: %s\n",strerror(errno));
+        fflush(stdout); return 1;
     }
 
-    /* Fork child untuk right Joy-Con */
-    pid_t pid_r = fork();
-    if (pid_r == 0) {
-        /* Child: buka right event device, copy ke pipe */
-        int src = open(right_path, O_RDONLY);
-        if (src < 0) { perror("open right"); exit(1); }
-        int dst = open(right_dst, O_WRONLY);
-        if (dst < 0) { perror("open right dst"); exit(1); }
-        char buf[4096];
-        ssize_t n;
-        while ((n = read(src, buf, sizeof(buf))) > 0)
-            write(dst, buf, n);
-        exit(0);
+    /* Center all axes */
+    emit(EV_ABS,ABS_X,0); emit(EV_ABS,ABS_Y,0);
+    emit(EV_ABS,ABS_RX,0); emit(EV_ABS,ABS_RY,0);
+    emit(EV_ABS,ABS_HAT0X,0); emit(EV_ABS,ABS_HAT0Y,0);
+    emit(EV_SYN,SYN_REPORT,0);
+
+    /* Open Joy-Con devices */
+    left_fd = open(left_path, O_RDONLY);
+    if (left_fd < 0) {
+        fprintf(stdout,"ERROR:open left %s: %s\n",left_path,strerror(errno));
+        fflush(stdout); ioctl(uinput_fd,UI_DEV_DESTROY); return 1;
+    }
+    right_fd = open(right_path, O_RDONLY);
+    if (right_fd < 0) {
+        fprintf(stdout,"ERROR:open right %s: %s\n",right_path,strerror(errno));
+        fflush(stdout); close(left_fd); ioctl(uinput_fd,UI_DEV_DESTROY); return 1;
     }
 
-    /* ---------- 7. Loop forward: pipe (JNI) → uinput_fd ---------- */
-    int src_fd = open(uinput_src, O_RDONLY);
-    if (src_fd < 0) die("open uinput pipe src");
+    /* GRAB exclusive — stops Android from also forwarding raw events */
+    ioctl(left_fd,  EVIOCGRAB, 1);
+    ioctl(right_fd, EVIOCGRAB, 1);
 
-    char buf[4096];
-    ssize_t n;
-    while ((n = read(src_fd, buf, sizeof(buf))) > 0) {
-        ssize_t written = 0;
-        while (written < n) {
-            ssize_t w = write(ufd, buf + written, n - written);
-            if (w < 0) goto cleanup;
-            written += w;
-        }
+    running = 1;
+    fprintf(stdout,"UINPUT_READY\n"); fflush(stdout);
+
+    pthread_t tl, tr;
+    pthread_create(&tl, NULL, thread_left,  NULL);
+    pthread_create(&tr, NULL, thread_right, NULL);
+
+    /* Block reading stdin — Java sends "STOP\n" to stop */
+    char line[64];
+    while (running && fgets(line, sizeof(line), stdin)) {
+        if (strncmp(line,"STOP",4)==0) break;
     }
+    running = 0;
 
-cleanup:
-    /* ---------- 8. Cleanup ---------- */
-    kill(pid_l, SIGTERM);
-    kill(pid_r, SIGTERM);
-    waitpid(pid_l, NULL, 0);
-    waitpid(pid_r, NULL, 0);
-    ioctl(ufd, UI_DEV_DESTROY);
-    close(ufd);
-    close(src_fd);
+    /* Close fds to unblock blocked read() in threads */
+    close(left_fd);  left_fd  = -1;
+    close(right_fd); right_fd = -1;
+
+    pthread_join(tl, NULL);
+    pthread_join(tr, NULL);
+
+    ioctl(uinput_fd, UI_DEV_DESTROY);
+    close(uinput_fd);
+    fprintf(stdout,"STATUS:STOPPED\n"); fflush(stdout);
     return 0;
 }

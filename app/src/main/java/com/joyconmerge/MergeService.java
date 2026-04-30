@@ -9,11 +9,10 @@ import android.content.Intent;
 import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
-import android.os.ParcelFileDescriptor;
 import androidx.core.app.NotificationCompat;
 
-import java.io.DataOutputStream;
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -21,36 +20,20 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 
 /**
- * MergeService v4 — fully self-contained, zero external dependencies.
+ * MergeService v6 — root binary handles everything directly.
  *
- * ╔══════════════════════════════════════════════════════════════════╗
- * ║  ARSITEKTUR                                                      ║
- * ╠══════════════════════════════════════════════════════════════════╣
- * ║  APK membawa binary C "uinput_setup_<abi>" sebagai asset.       ║
- * ║  Binary ini dikompilasi static (tidak butuh .so di device).     ║
- * ║                                                                  ║
- * ║  Flow:                                                           ║
- * ║  1. Extract binary ke /data/data/<pkg>/files/uinput_setup       ║
- * ║  2. chmod 755                                                    ║
- * ║  3. Root shell jalankan binary dengan args:                     ║
- * ║       uinput_setup <leftPath> <rightPath> <pid>                 ║
- * ║                    <leftWriteFd> <rightWriteFd> <uinputReadFd>  ║
- * ║  4. Binary C:                                                    ║
- * ║     a. open(/dev/uinput) — root bisa                            ║
- * ║     b. Semua ioctl setup di fd asli — tidak ada pipe trick      ║
- * ║     c. write(uinput_user_dev) — di fd asli ✓                   ║
- * ║     d. UI_DEV_CREATE — di fd asli ✓                            ║
- * ║     e. Print "UINPUT_READY"                                     ║
- * ║     f. fork: cat /dev/input/eventL → leftWritePipe             ║
- * ║     g. fork: cat /dev/input/eventR → rightWritePipe            ║
- * ║     h. loop: baca uinputReadPipe → tulis ke uinput_fd          ║
- * ║  5. Java baca "UINPUT_READY", lalu call startMergeWithFds      ║
- * ║  6. JNI baca event dari pipe, map, tulis ke uinputWritePipe    ║
- * ╚══════════════════════════════════════════════════════════════════╝
+ * Architecture:
+ *   1. Extract uinput_setup binary from assets
+ *   2. Scan Joy-Con paths via root
+ *   3. Launch binary as root with all config as args
+ *   4. Binary opens /dev/uinput + Joy-Con devices, grabs them exclusively,
+ *      runs two threads (left/right reader), writes merged events to uinput
+ *   5. Java reads stdout for status ("UINPUT_READY", "STATUS:...", "ERROR:...")
+ *   6. To stop: write "STOP\n" to binary's stdin
+ *
+ * No JNI, no event pipes, no race conditions.
  */
 public class MergeService extends Service {
-
-    static { System.loadLibrary("joyconmerge"); }
 
     public static final String ACTION_START = "com.joyconmerge.START";
     public static final String ACTION_STOP  = "com.joyconmerge.STOP";
@@ -62,7 +45,7 @@ public class MergeService extends Service {
         void onEvent(String event);
     }
 
-    public class LocalBinder extends Binder {
+    public class LocalBinder extends android.os.Binder {
         MergeService getService() { return MergeService.this; }
     }
 
@@ -70,37 +53,31 @@ public class MergeService extends Service {
     private StatusCallback callback;
     private boolean merging = false;
     private Process rootProcess = null;
+    private DataOutputStream rootStdin = null;
 
-    /* JNI */
-    public native int    startMergeWithFds(int leftFd, int rightFd, int uinputFd);
-    public native void   stopMerge();
-    public native void   setCallback(StatusCallback cb);
-    public native void   setConfig(
-        int fuzz, int flat,
-        int invLX, int invLY, int invRX, int invRY,
-        int laxX, int laxY, int raxX, int raxY,
-        int cA, int mA, int cB, int mB,
-        int cX, int mX, int cY, int mY,
-        int cR, int mR, int cZR, int mZR,
-        int cPlus, int mPlus, int cR3, int mR3,
-        int cL, int mL, int cZL, int mZL,
-        int cMinus, int mMinus, int cL3, int mL3,
-        int dpUp, int dpDown, int dpLeft, int dpRight
-    );
-    public native String getFoundDevices();
+    // Config — set by MainActivity before starting
+    private int fuzz=256, flat=4096;
+    private int invLX=0, invLY=0, invRX=0, invRY=0;
+    private int mapA=0x130,mapB=0x131,mapX=0x133,mapY=0x134;
+    private int mapR=0x136,mapZR=0x137,mapPlus=0x13b,mapR3=0x13d;
+    private int mapL=0x135,mapZL=0x139,mapMinus=0x13a,mapL3=0x13c;
+
+    public void setConfig(int fuzz, int flat,
+            int invLX, int invLY, int invRX, int invRY,
+            int mapA, int mapB, int mapX, int mapY,
+            int mapR, int mapZR, int mapPlus, int mapR3,
+            int mapL, int mapZL, int mapMinus, int mapL3) {
+        this.fuzz=fuzz; this.flat=flat;
+        this.invLX=invLX; this.invLY=invLY; this.invRX=invRX; this.invRY=invRY;
+        this.mapA=mapA; this.mapB=mapB; this.mapX=mapX; this.mapY=mapY;
+        this.mapR=mapR; this.mapZR=mapZR; this.mapPlus=mapPlus; this.mapR3=mapR3;
+        this.mapL=mapL; this.mapZL=mapZL; this.mapMinus=mapMinus; this.mapL3=mapL3;
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        setCallback(new StatusCallback() {
-            @Override public void onStatus(String msg) {
-                if (callback != null) callback.onStatus(msg);
-            }
-            @Override public void onEvent(String event) {
-                if (callback != null) callback.onEvent(event);
-            }
-        });
     }
 
     @Override
@@ -109,12 +86,7 @@ public class MergeService extends Service {
         String action = intent.getAction();
         if (ACTION_START.equals(action)) {
             startForeground(NOTIF_ID, buildNotification("Running — Joy-Cons merged"));
-            new Thread(() -> {
-                int result = openAndMerge();
-                merging = (result == 0);
-                if (!merging)
-                    notifyStatus("ERROR: startMerge failed — check device paths");
-            }).start();
+            new Thread(this::openAndMerge).start();
         } else if (ACTION_STOP.equals(action)) {
             doStop();
         }
@@ -122,66 +94,61 @@ public class MergeService extends Service {
     }
 
     private void doStop() {
-        stopMerge();
+        // Send STOP command to binary's stdin
+        if (rootStdin != null) {
+            try {
+                rootStdin.writeBytes("STOP\n");
+                rootStdin.flush();
+                Thread.sleep(400);
+            } catch (Exception ignored) {}
+        }
         killRootProcess();
         merging = false;
         stopForeground(true);
         stopSelf();
-        notifyStatus("STOPPED"); // BUG FIX #1: notify UI so button updates immediately
+        notifyStatus("STOPPED");
     }
 
     private void killRootProcess() {
         if (rootProcess != null) {
             try {
-                // BUG FIX #2: send "exit" so root shell kills its forked children
-                // (the cat eventL / cat eventR processes) before we SIGKILL.
-                // Without this, those children keep /dev/input/event* open and
-                // the next scan cannot re-open the devices until BT reconnects.
                 rootProcess.getOutputStream().write("exit\n".getBytes());
                 rootProcess.getOutputStream().flush();
-                Thread.sleep(350); // give children time to be reaped
+                Thread.sleep(300);
             } catch (Exception ignored) {}
             rootProcess.destroy();
             rootProcess = null;
+            rootStdin = null;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // STEP 0: Extract binary uinput_setup dari assets ke storage app
-    // ─────────────────────────────────────────────────────────────────
     private File extractBinary() throws IOException {
-        String abi = Build.SUPPORTED_ABIS[0]; // "arm64-v8a" atau "armeabi-v7a"
-        // Normalise: kita hanya bundle dua ABI ini
-        if (!abi.equals("arm64-v8a") && !abi.equals("armeabi-v7a")) {
-            // Fallback ke arm64 jika ABI tidak dikenal (x86 emulator, dll)
+        String abi = Build.SUPPORTED_ABIS[0];
+        if (!abi.equals("arm64-v8a") && !abi.equals("armeabi-v7a"))
             abi = "arm64-v8a";
-        }
         String assetName = "uinput_setup_" + abi;
         File outFile = new File(getFilesDir(), "uinput_setup");
-
-        // Re-extract setiap kali untuk memastikan binary selalu up-to-date
-        try (InputStream in  = getAssets().open(assetName);
+        try (InputStream in = getAssets().open(assetName);
              FileOutputStream out = new FileOutputStream(outFile)) {
-            byte[] buf = new byte[8192];
-            int n;
+            byte[] buf = new byte[8192]; int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
         }
         outFile.setExecutable(true, false);
         return outFile;
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // STEP 1: Scan Joy-Con paths via root
-    // ─────────────────────────────────────────────────────────────────
     private String[] scanJoyConPaths() throws IOException, InterruptedException {
-        Process scanProc = Runtime.getRuntime().exec("su");
-        DataOutputStream scanOs =
-            new DataOutputStream(scanProc.getOutputStream());
-        BufferedReader scanBr =
-            new BufferedReader(new InputStreamReader(scanProc.getInputStream()));
-        drainStderr(scanProc);
+        Process proc = Runtime.getRuntime().exec("su");
+        DataOutputStream os = new DataOutputStream(proc.getOutputStream());
+        BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+        new Thread(() -> {
+            try (BufferedReader er = new BufferedReader(
+                    new InputStreamReader(proc.getErrorStream()))) {
+                while (er.readLine() != null) {}
+            } catch (IOException ignored) {}
+        }).start();
 
-        scanOs.writeBytes(
+        os.writeBytes(
             "for f in /dev/input/event*; do\n" +
             "  name=$(cat /sys/class/input/$(basename $f)/device/name 2>/dev/null)\n" +
             "  case \"$name\" in\n" +
@@ -191,85 +158,71 @@ public class MergeService extends Service {
             "done\n" +
             "echo SCAN_DONE\n" +
             "exit\n");
-        scanOs.flush();
+        os.flush();
 
-        String left = "", right = "", line;
-        while ((line = scanBr.readLine()) != null) {
+        String left="", right="", line;
+        while ((line = br.readLine()) != null) {
             if (line.startsWith("LEFT:"))  left  = line.substring(5).trim();
             if (line.startsWith("RIGHT:")) right = line.substring(6).trim();
             if (line.equals("SCAN_DONE")) break;
         }
-        scanProc.waitFor();
+        proc.waitFor();
         return new String[]{left, right};
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // MAIN: openAndMerge
-    // ─────────────────────────────────────────────────────────────────
-    private int openAndMerge() {
-
-        // Extract binary
+    private void openAndMerge() {
         File binary;
         try {
             binary = extractBinary();
-            notifyStatus("Binary extracted: " + binary.getAbsolutePath());
+            notifyStatus("Binary extracted");
         } catch (IOException e) {
-            notifyStatus("ERROR: extract binary: " + e.getMessage());
-            return -1;
+            notifyStatus("ERROR: extract binary: " + e.getMessage()); return;
         }
 
-        // Scan Joy-Con paths
         String leftPath, rightPath;
         try {
             String[] paths = scanJoyConPaths();
-            leftPath  = paths[0];
-            rightPath = paths[1];
-        } catch (IOException | InterruptedException e) {
-            notifyStatus("ERROR: scan failed: " + e.getMessage());
-            return -1;
+            leftPath = paths[0]; rightPath = paths[1];
+        } catch (Exception e) {
+            notifyStatus("ERROR: scan failed: " + e.getMessage()); return;
         }
 
-        if (leftPath.isEmpty()) {
-            notifyStatus("ERROR: Left Joy-Con not found — paired & connected?");
-            return -1;
-        }
-        if (rightPath.isEmpty()) {
-            notifyStatus("ERROR: Right Joy-Con not found — paired & connected?");
-            return -1;
-        }
-        notifyStatus("Using: L=" + leftPath + "  R=" + rightPath);
+        if (leftPath.isEmpty())  { notifyStatus("ERROR: Left Joy-Con not found");  return; }
+        if (rightPath.isEmpty()) { notifyStatus("ERROR: Right Joy-Con not found"); return; }
+        notifyStatus("Found: L=" + leftPath + " R=" + rightPath);
 
-        // Buat 3 pipe
-        //   leftPipe   [0]=read(JNI)   [1]=write(binary child)
-        //   rightPipe  [0]=read(JNI)   [1]=write(binary child)
-        //   uinputPipe [0]=read(binary) [1]=write(JNI)
-        ParcelFileDescriptor[] leftPipe, rightPipe, uinputPipe;
-        try {
-            leftPipe   = ParcelFileDescriptor.createPipe();
-            rightPipe  = ParcelFileDescriptor.createPipe();
-            uinputPipe = ParcelFileDescriptor.createPipe();
-        } catch (IOException e) {
-            notifyStatus("ERROR: createPipe: " + e.getMessage());
-            return -1;
-        }
+        // Build command: binary path + all config as args
+        String cmd = binary.getAbsolutePath()
+            + " " + leftPath
+            + " " + rightPath
+            + " " + fuzz
+            + " " + flat
+            + " " + invLX
+            + " " + invLY
+            + " " + invRX
+            + " " + invRY
+            + " " + mapA
+            + " " + mapB
+            + " " + mapX
+            + " " + mapY
+            + " " + mapR
+            + " " + mapZR
+            + " " + mapPlus
+            + " " + mapR3
+            + " " + mapL
+            + " " + mapZL
+            + " " + mapMinus
+            + " " + mapL3
+            + "\n";
 
-        int myPid        = android.os.Process.myPid();
-        int leftWriteFd  = leftPipe[1].getFd();
-        int rightWriteFd = rightPipe[1].getFd();
-        int uinputReadFd = uinputPipe[0].getFd();
-
-        // Jalankan binary via root shell
-        // Binary akan berjalan sebagai root, membuka /dev/uinput,
-        // melakukan setup, lalu print "UINPUT_READY"
         try {
             Process proc = Runtime.getRuntime().exec("su");
             rootProcess = proc;
-            DataOutputStream os =
-                new DataOutputStream(proc.getOutputStream());
-            BufferedReader br =
-                new BufferedReader(new InputStreamReader(proc.getInputStream()));
+            rootStdin   = new DataOutputStream(proc.getOutputStream());
+            BufferedReader br = new BufferedReader(
+                new InputStreamReader(proc.getInputStream()));
 
-            // Drain stderr ke log
+            // Drain stderr
             new Thread(() -> {
                 try (BufferedReader er = new BufferedReader(
                         new InputStreamReader(proc.getErrorStream()))) {
@@ -279,59 +232,35 @@ public class MergeService extends Service {
                 } catch (IOException ignored) {}
             }).start();
 
-            notifyStatus("Setting up /dev/uinput...");
+            // Send command to root shell
+            rootStdin.writeBytes(cmd);
+            rootStdin.flush();
 
-            // Jalankan binary dengan args
-            os.writeBytes(
-                binary.getAbsolutePath() + " " +
-                leftPath  + " " +
-                rightPath + " " +
-                myPid     + " " +
-                leftWriteFd  + " " +
-                rightWriteFd + " " +
-                uinputReadFd + "\n");
-            os.flush();
-
-            // Tunggu "UINPUT_READY"
+            // Read status lines
             boolean ready = false;
             String line;
             while ((line = br.readLine()) != null) {
-                notifyStatus(line);
-                if (line.equals("UINPUT_READY")) { ready = true; break; }
-                if (line.startsWith("ERROR:"))   break;
+                if (line.startsWith("STATUS:")) {
+                    notifyStatus(line.substring(7));
+                } else if (line.equals("UINPUT_READY")) {
+                    ready = true;
+                    merging = true;
+                    notifyStatus("RUNNING");
+                } else if (line.startsWith("ERROR:")) {
+                    notifyStatus(line);
+                    break;
+                }
+                if (!ready && line.startsWith("ERROR:")) break;
             }
 
             if (!ready) {
-                notifyStatus("ERROR: uinput setup failed");
+                notifyStatus("ERROR: binary failed to start");
                 killRootProcess();
-                return -1;
             }
-
-            // Tutup ujung pipe yang dipegang binary
-            leftPipe[1].close();
-            rightPipe[1].close();
-            uinputPipe[0].close();
-
-            // Pass fd ke JNI — selesai!
-            return startMergeWithFds(
-                leftPipe[0].getFd(),
-                rightPipe[0].getFd(),
-                uinputPipe[1].getFd()
-            );
 
         } catch (IOException e) {
             notifyStatus("ERROR: su failed: " + e.getMessage());
-            return -1;
         }
-    }
-
-    private void drainStderr(Process proc) {
-        new Thread(() -> {
-            try (BufferedReader er = new BufferedReader(
-                    new InputStreamReader(proc.getErrorStream()))) {
-                while (er.readLine() != null) {}
-            } catch (IOException ignored) {}
-        }).start();
     }
 
     private void notifyStatus(String msg) {
@@ -347,14 +276,12 @@ public class MergeService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        stopMerge();
         killRootProcess();
     }
 
     private void createNotificationChannel() {
         NotificationChannel ch = new NotificationChannel(
             CHANNEL_ID, "Joy-Con Merge", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("Keeps Joy-Cons merged in background");
         getSystemService(NotificationManager.class).createNotificationChannel(ch);
     }
 

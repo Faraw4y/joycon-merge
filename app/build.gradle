@@ -12,8 +12,8 @@ android {
         applicationId "com.joyconmerge"
         minSdk 26
         targetSdk 34
-        versionCode 3
-        versionName "3.0"
+        versionCode 6
+        versionName "6.0"
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
@@ -51,36 +51,21 @@ android {
 }
 
 /*
- * Copy binary uinput_setup ke assets setelah NDK selesai kompilasi.
- *
- * Nama task CMake di AGP modern adalah:
- *   configureCMake<Variant>[<ABI>]
- *   buildCMake<Variant>[<ABI>]    <- tapi ini tidak selalu reliable
- *
- * Cara paling reliable: pakai preBuild sebagai trigger,
- * lalu cek file output CMake yang sudah ada.
- * Tapi yang paling simple dan proven: gunakan Task rule dari AGP
- * dengan nama eksak yang dihasilkan.
- *
- * SOLUSI TERBAIK: Jalankan copy di afterEvaluate dengan
- * dependsOn ke externalNativeBuild task yang benar.
+ * Copy uinput_setup binary to assets after NDK build.
+ * Binary is bundled as "uinput_setup_<abi>" in APK assets.
+ * MergeService extracts correct ABI binary at runtime.
  */
 afterEvaluate {
-    // Task copy untuk setiap ABI dan variant
     android.applicationVariants.all { variant ->
-        def variantName = variant.name.capitalize()  // "Release" atau "Debug"
+        def variantName = variant.name.capitalize()
 
         ['arm64-v8a', 'armeabi-v7a'].each { abi ->
             def abiTag = abi.replace('-', '_').replace('/', '_')
-
-            // Path output CMake: build/intermediates/cmake/<variant>/obj/<abi>/uinput_setup
             def srcFile = file("${layout.buildDirectory.get().asFile}/intermediates/cmake/${variant.name}/obj/${abi}/uinput_setup")
             def dstDir  = file("src/main/assets")
             def dstFile = file("${dstDir}/uinput_setup_${abi}")
 
             def copyTask = tasks.register("copyUinputSetup_${abiTag}_${variantName}") {
-                // Tidak pakai dependsOn nama task — langsung pastikan assets dir ada
-                // Copy dilakukan manual di doLast setelah build selesai
                 doLast {
                     if (srcFile.exists()) {
                         dstDir.mkdirs()
@@ -88,14 +73,12 @@ afterEvaluate {
                         println "Copied uinput_setup (${abi}) -> ${dstFile}"
                     } else {
                         throw new GradleException(
-                            "uinput_setup binary not found at: ${srcFile}\n" +
-                            "CMake build may not have run yet.")
+                            "uinput_setup binary not found: ${srcFile}\n" +
+                            "Make sure NDK build ran first.")
                     }
                 }
             }
 
-            // Jalankan copy SETELAH externalNativeBuild selesai,
-            // SEBELUM mergeAssets mengemas APK
             def externalBuildTask = tasks.findByName("externalNativeBuild${variantName}")
             if (externalBuildTask) {
                 copyTask.configure { dependsOn externalBuildTask }
