@@ -228,30 +228,37 @@ Java_com_joyconmerge_MergeService_setConfig(JNIEnv *env,jobject thiz,
     cfg.dpad_up=dpUp; cfg.dpad_down=dpDown; cfg.dpad_left=dpLeft; cfg.dpad_right=dpRight;
 }
 
+/* Legacy path-based startMerge — kept for reference but NOT used.
+   SELinux on KernelSU blocks open() of /dev/input/event* from app UID
+   even after chmod, so we use startMergeWithFds instead. */
 JNIEXPORT jint JNICALL
 Java_com_joyconmerge_MergeService_startMerge(JNIEnv *env,jobject thiz,
     jstring jLeftPath, jstring jRightPath) {
+    notify_status("ERROR: startMerge(path) called — use startMergeWithFds instead");
+    return -1;
+}
+
+/* NEW: Accept already-open file descriptors from the Java layer.
+   Java opens them inside a root shell (via pipe + cat) and passes
+   the read-end fds here. SELinux never sees our process doing the
+   open() — root did it, we just inherit the fd. */
+JNIEXPORT jint JNICALL
+Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env,jobject thiz,
+    jint jLeftFd, jint jRightFd) {
     if (running) return 0;
 
-    /* Copy the Java-side resolved paths (found by root shell scan) */
-    const char *lp = (*env)->GetStringUTFChars(env, jLeftPath,  NULL);
-    const char *rp = (*env)->GetStringUTFChars(env, jRightPath, NULL);
-    snprintf(left_path,  sizeof(left_path),  "%s", lp);
-    snprintf(right_path, sizeof(right_path), "%s", rp);
-    (*env)->ReleaseStringUTFChars(env, jLeftPath,  lp);
-    (*env)->ReleaseStringUTFChars(env, jRightPath, rp);
+    /* dup() the fds so Java can close its ParcelFileDescriptor handles
+       without affecting our reads. */
+    left_fd  = dup(jLeftFd);
+    right_fd = dup(jRightFd);
 
-    char msg[128];
-    snprintf(msg, sizeof(msg), "Using: L=%s  R=%s", left_path, right_path);
-    notify_status(msg);
+    if (left_fd < 0)  { notify_errno("dup left fd");  return -1; }
+    if (right_fd < 0) { notify_errno("dup right fd"); return -1; }
 
-    left_fd=open(left_path,O_RDONLY);
-    if (left_fd<0) { notify_errno("open Left Joy-Con"); return -1; }
-    ioctl(left_fd,EVIOCGRAB,1);
-
-    right_fd=open(right_path,O_RDONLY);
-    if (right_fd<0) { notify_errno("open Right Joy-Con"); return -1; }
-    ioctl(right_fd,EVIOCGRAB,1);
+    /* Note: EVIOCGRAB is intentionally skipped here.
+       We are reading from a pipe, not the raw device node, so grab
+       would fail with ENOTTY. The root-side `cat` process holds the
+       device open exclusively; stopping the root shell stops input. */
 
     if (setup_uinput()<0) return -1;
 

@@ -8,8 +8,11 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
 import androidx.core.app.NotificationCompat;
 import java.io.DataOutputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.IOException;
 
 public class MergeService extends Service {
@@ -32,9 +35,10 @@ public class MergeService extends Service {
     private final IBinder binder = new LocalBinder();
     private StatusCallback callback;
     private boolean merging = false;
+    private Process pipingProcess = null; // root shell piping events to us
 
     /* JNI */
-    public native int  startMerge(String leftPath, String rightPath);
+    public native int  startMergeWithFds(int leftFd, int rightFd);
     public native void stopMerge();
     public native void setCallback(StatusCallback cb);
     public native void setConfig(
@@ -50,6 +54,10 @@ public class MergeService extends Service {
         int dpUp, int dpDown, int dpLeft, int dpRight
     );
     public native String getFoundDevices();
+
+    // Kept for display purposes
+    private String resolvedLeftPath  = "";
+    private String resolvedRightPath = "";
 
     @Override
     public void onCreate() {
@@ -67,21 +75,17 @@ public class MergeService extends Service {
         if (ACTION_START.equals(action)) {
             startForeground(NOTIF_ID, buildNotification("Running — Joy-Cons merged"));
             new Thread(() -> {
-                // Use root shell to open up /dev/input and /dev/uinput
-                // so our process can then access them directly
-                boolean rootOk = grantDevicePermissions();
-                if (!rootOk) {
-                    notifyStatus("ERROR: Root scan failed — grant root in KernelSU and ensure Joy-Cons are paired");
-                    return;
-                }
-                // Pass root-resolved paths directly into JNI — avoids SELinux opendir block
-                int result = startMerge(resolvedLeftPath, resolvedRightPath);
+                int result = openAndMerge();
                 merging = result == 0;
                 if (!merging)
                     notifyStatus("ERROR: startMerge failed — check device paths");
             }).start();
         } else if (ACTION_STOP.equals(action)) {
             stopMerge();
+            if (pipingProcess != null) {
+                pipingProcess.destroy();
+                pipingProcess = null;
+            }
             merging = false;
             stopForeground(true);
             stopSelf();
@@ -89,32 +93,33 @@ public class MergeService extends Service {
         return START_STICKY;
     }
 
-    // Paths resolved by root shell scan; passed into JNI directly.
-    private String resolvedLeftPath  = "";
-    private String resolvedRightPath = "";
-
     /**
-     * Open a root shell to:
-     *  1. chmod /dev/input/* and /dev/uinput so the app process can open them.
-     *  2. Scan /dev/input/event* for Joy-Con names (root can read them even
-     *     when SELinux blocks the app UID from doing opendir).
-     *  Results are stored in resolvedLeftPath / resolvedRightPath.
+     * THE FIX:
+     *
+     * The old code did: chmod /dev/input/event* → then app opens it directly.
+     * This fails because SELinux on KernelSU/Magisk blocks untrusted app UIDs
+     * from opening /dev/input/event* regardless of DAC (chmod) permissions.
+     *
+     * The fix: open the event devices INSIDE root shell using `cat` piped into
+     * a ParcelFileDescriptor pipe. Root does the open() → SELinux allows it.
+     * We receive events through the read end of the pipe → no SELinux check on us.
      */
-    private boolean grantDevicePermissions() {
+    private int openAndMerge() {
         try {
-            Process su = Runtime.getRuntime().exec("su");
-            DataOutputStream os = new DataOutputStream(su.getOutputStream());
-            java.io.BufferedReader br = new java.io.BufferedReader(
-                new java.io.InputStreamReader(su.getInputStream()));
+            // --- Step 1: Scan for Joy-Con device paths using root ---
+            Process scanProc = Runtime.getRuntime().exec("su");
+            DataOutputStream scanOs = new DataOutputStream(scanProc.getOutputStream());
+            BufferedReader scanBr = new BufferedReader(
+                new InputStreamReader(scanProc.getInputStream()));
+            BufferedReader scanEr = new BufferedReader(
+                new InputStreamReader(scanProc.getErrorStream()));
 
-            // chmod so app process can open the nodes directly after this
-            os.writeBytes("chmod 755 /dev/input\n");
-            os.writeBytes("chmod 644 /dev/input/event*\n");
-            os.writeBytes("chmod 666 /dev/uinput\n");
+            // Drain stderr in background to prevent blocking
+            new Thread(() -> {
+                try { while (scanEr.readLine() != null) {} } catch (IOException ignored) {}
+            }).start();
 
-            // Scan event nodes for Joy-Con names entirely inside root shell.
-            // Output format: "LEFT:/dev/input/eventN" or "RIGHT:/dev/input/eventN"
-            os.writeBytes(
+            scanOs.writeBytes(
                 "for f in /dev/input/event*; do\n" +
                 "  name=$(cat /sys/class/input/$(basename $f)/device/name 2>/dev/null)\n" +
                 "  case \"$name\" in\n" +
@@ -124,29 +129,80 @@ public class MergeService extends Service {
                 "done\n" +
                 "echo SCAN_DONE\n" +
                 "exit\n");
-            os.flush();
+            scanOs.flush();
 
-            // Read scan results line-by-line before waitFor
             String line;
-            while ((line = br.readLine()) != null) {
+            while ((line = scanBr.readLine()) != null) {
                 if (line.startsWith("LEFT:"))  resolvedLeftPath  = line.substring(5).trim();
                 if (line.startsWith("RIGHT:")) resolvedRightPath = line.substring(6).trim();
                 if (line.equals("SCAN_DONE")) break;
             }
+            int exitCode = scanProc.waitFor();
+            notifyStatus("Root shell exit code: " + exitCode);
 
-            int exit = su.waitFor();
-            notifyStatus("Root shell exit code: " + exit);
-            if (exit != 0) return false;
+            if (resolvedLeftPath.isEmpty()) {
+                notifyStatus("ERROR: Left Joy-Con not found — is it paired and connected?");
+                return -1;
+            }
+            if (resolvedRightPath.isEmpty()) {
+                notifyStatus("ERROR: Right Joy-Con not found — is it paired and connected?");
+                return -1;
+            }
+            notifyStatus("Using: L=" + resolvedLeftPath + "  R=" + resolvedRightPath);
 
-            if (resolvedLeftPath.isEmpty())
-                notifyStatus("ERROR: Left Joy-Con not found via root scan — is it paired?");
-            if (resolvedRightPath.isEmpty())
-                notifyStatus("ERROR: Right Joy-Con not found via root scan — is it paired?");
+            // --- Step 2: Create pipes; have root cat device data into write ends ---
+            // pipe[0] = read end (our JNI reads events from here)
+            // pipe[1] = write end (root's `cat /dev/input/eventN` writes here)
+            ParcelFileDescriptor[] leftPipe  = ParcelFileDescriptor.createPipe();
+            ParcelFileDescriptor[] rightPipe = ParcelFileDescriptor.createPipe();
 
-            return !resolvedLeftPath.isEmpty() && !resolvedRightPath.isEmpty();
+            int myPid        = android.os.Process.myPid();
+            int leftWriteFd  = leftPipe[1].getFd();
+            int rightWriteFd = rightPipe[1].getFd();
+
+            // Single root shell: chmod uinput + start both cat pipes in background
+            Process pipeProc = Runtime.getRuntime().exec("su");
+            pipingProcess = pipeProc;
+            DataOutputStream pipeOs = new DataOutputStream(pipeProc.getOutputStream());
+            BufferedReader pipeBr = new BufferedReader(
+                new InputStreamReader(pipeProc.getInputStream()));
+            BufferedReader pipeEr = new BufferedReader(
+                new InputStreamReader(pipeProc.getErrorStream()));
+
+            new Thread(() -> {
+                try { while (pipeEr.readLine() != null) {} } catch (IOException ignored) {}
+            }).start();
+
+            pipeOs.writeBytes("chmod 666 /dev/uinput\n");
+            // Write event stream into our pipe write-ends via /proc/<pid>/fd/<fd>
+            pipeOs.writeBytes("cat " + resolvedLeftPath
+                + " > /proc/" + myPid + "/fd/" + leftWriteFd + " &\n");
+            pipeOs.writeBytes("cat " + resolvedRightPath
+                + " > /proc/" + myPid + "/fd/" + rightWriteFd + " &\n");
+            pipeOs.writeBytes("echo PIPES_READY\n");
+            pipeOs.flush();
+
+            // Wait until pipes are set up
+            while ((line = pipeBr.readLine()) != null) {
+                if (line.equals("PIPES_READY")) break;
+            }
+
+            // Close write ends in OUR process — only root's cat processes hold them now.
+            // When root closes them (on stopMerge), JNI read() will get EOF cleanly.
+            leftPipe[1].close();
+            rightPipe[1].close();
+
+            // --- Step 3: Pass read-end fds to JNI ---
+            // JNI now reads input_event structs from these pipe fds just like it
+            // would from /dev/input/eventN directly — same binary format.
+            int result = startMergeWithFds(leftPipe[0].getFd(), rightPipe[0].getFd());
+
+            // Don't close leftPipe[0]/rightPipe[0] — JNI owns them now.
+            return result;
+
         } catch (IOException | InterruptedException e) {
             notifyStatus("ERROR: su failed: " + e.getMessage());
-            return false;
+            return -1;
         }
     }
 
@@ -164,6 +220,7 @@ public class MergeService extends Service {
     public void onDestroy() {
         super.onDestroy();
         stopMerge();
+        if (pipingProcess != null) { pipingProcess.destroy(); pipingProcess = null; }
     }
 
     private void createNotificationChannel() {
