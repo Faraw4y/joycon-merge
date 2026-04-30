@@ -100,7 +100,7 @@ static void notify_event(const char *msg) {
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
-
+static void notify_errno(const char *prefix) {
     char buf[256];
     snprintf(buf, sizeof(buf), "ERROR: %s: %s", prefix, strerror(errno));
     notify_status(buf);
