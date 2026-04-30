@@ -2,9 +2,13 @@ plugins {
     id 'com.android.application'
 }
 
+// Repositories now managed in settings.gradle
+
 android {
     namespace 'com.joyconmerge'
     compileSdk 34
+
+    ndkVersion "25.2.9519653"
 
     defaultConfig {
         applicationId "com.joyconmerge"
