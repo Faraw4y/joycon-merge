@@ -59,19 +59,22 @@ public class MergeService extends Service {
     private int fuzz=256, flat=4096;
     private int invLX=0, invLY=0, invRX=0, invRY=0;
     private int mapA=0x130,mapB=0x131,mapX=0x133,mapY=0x134;
-    private int mapR=0x136,mapZR=0x137,mapPlus=0x13b,mapR3=0x13d;
-    private int mapL=0x135,mapZL=0x139,mapMinus=0x13a,mapL3=0x13c;
+    private int mapR=0x137,mapZR=0x139,mapPlus=0x13b,mapR3=0x13e;
+    private int mapL=0x136,mapZL=0x138,mapMinus=0x13a,mapL3=0x13d;
+    private int mapHome=0x13c;
 
     public void setConfig(int fuzz, int flat,
             int invLX, int invLY, int invRX, int invRY,
             int mapA, int mapB, int mapX, int mapY,
             int mapR, int mapZR, int mapPlus, int mapR3,
-            int mapL, int mapZL, int mapMinus, int mapL3) {
+            int mapL, int mapZL, int mapMinus, int mapL3,
+            int mapHome) {
         this.fuzz=fuzz; this.flat=flat;
         this.invLX=invLX; this.invLY=invLY; this.invRX=invRX; this.invRY=invRY;
         this.mapA=mapA; this.mapB=mapB; this.mapX=mapX; this.mapY=mapY;
         this.mapR=mapR; this.mapZR=mapZR; this.mapPlus=mapPlus; this.mapR3=mapR3;
         this.mapL=mapL; this.mapZL=mapZL; this.mapMinus=mapMinus; this.mapL3=mapL3;
+        this.mapHome=mapHome;
     }
 
     @Override
@@ -213,6 +216,7 @@ public class MergeService extends Service {
             + " " + mapZL
             + " " + mapMinus
             + " " + mapL3
+            + " " + mapHome
             + "\n";
 
         try {

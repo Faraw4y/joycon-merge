@@ -224,7 +224,8 @@ public class MainActivity extends AppCompatActivity {
             config.getMapR(),  config.getMapZR(),
             config.getMapPlus(),config.getMapR3(),
             config.getMapL(),  config.getMapZL(),
-            config.getMapMinus(),config.getMapL3()
+            config.getMapMinus(),config.getMapL3(),
+            config.getMapHome()
         );
     }
 
@@ -236,7 +237,8 @@ public class MainActivity extends AppCompatActivity {
             BTN_CODES[spR.getSelectedItemPosition()],BTN_CODES[spZR.getSelectedItemPosition()],
             BTN_CODES[spPlus.getSelectedItemPosition()],BTN_CODES[spR3.getSelectedItemPosition()],
             BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
-            BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()]);
+            BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
+            config.getMapHome());
         Toast.makeText(this,"Button mapping saved!",Toast.LENGTH_SHORT).show();
         applyConfigToService();
     }
@@ -246,7 +248,8 @@ public class MainActivity extends AppCompatActivity {
             cbInvLX.isChecked(),cbInvLY.isChecked(),cbInvRX.isChecked(),cbInvRY.isChecked(),
             config.getMapA(),config.getMapB(),config.getMapX(),config.getMapY(),
             config.getMapR(),config.getMapZR(),config.getMapPlus(),config.getMapR3(),
-            config.getMapL(),config.getMapZL(),config.getMapMinus(),config.getMapL3());
+            config.getMapL(),config.getMapZL(),config.getMapMinus(),config.getMapL3(),
+            config.getMapHome());
         Toast.makeText(this,"Calibration saved!",Toast.LENGTH_SHORT).show();
         applyConfigToService();
     }

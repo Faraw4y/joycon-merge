@@ -32,8 +32,9 @@ static int stick_fuzz = 256;
 static int stick_flat = 4096;
 static int inv_lx=0, inv_ly=0, inv_rx=0, inv_ry=0;
 static int map_a=0x130, map_b=0x131, map_x=0x133, map_y=0x134;
-static int map_r=0x136, map_zr=0x137, map_plus=0x13b, map_r3=0x13d;
-static int map_l=0x135, map_zl=0x139, map_minus=0x13a, map_l3=0x13c;
+static int map_r=0x137, map_zr=0x139, map_plus=0x13b, map_r3=0x13e;
+static int map_l=0x136, map_zl=0x138, map_minus=0x13a, map_l3=0x13d;
+static int map_home=0x13c;
 
 static int uinput_fd = -1;
 static int left_fd   = -1;
@@ -83,10 +84,10 @@ static void handle_left(struct input_event *ev)
 {
     if (ev->type == EV_KEY) {
         int c=ev->code, v=ev->value;
-        if      (c==0x135) emit(EV_KEY, map_l,    v);
-        else if (c==0x139) emit(EV_KEY, map_zl,   v);
+        if      (c==0x136) emit(EV_KEY, map_l,    v);
+        else if (c==0x138) emit(EV_KEY, map_zl,   v);
         else if (c==0x13a) emit(EV_KEY, map_minus, v);
-        else if (c==0x13c) emit(EV_KEY, map_l3,   v);
+        else if (c==0x13d) emit(EV_KEY, map_l3,   v);
         else if (c==544||c==545||c==546||c==547) handle_dpad(c,v);
     } else if (ev->type == EV_ABS) {
         if (ev->code == 0) {
@@ -109,10 +110,11 @@ static void handle_right(struct input_event *ev)
         else if (c==305)   emit(EV_KEY, map_b,    v);
         else if (c==307)   emit(EV_KEY, map_x,    v);
         else if (c==308)   emit(EV_KEY, map_y,    v);
-        else if (c==0x136) emit(EV_KEY, map_r,    v);
-        else if (c==0x137) emit(EV_KEY, map_zr,   v);
+        else if (c==0x137) emit(EV_KEY, map_r,    v);
+        else if (c==0x139) emit(EV_KEY, map_zr,   v);
         else if (c==0x13b) emit(EV_KEY, map_plus, v);
-        else if (c==0x13d) emit(EV_KEY, map_r3,   v);
+        else if (c==0x13e) emit(EV_KEY, map_r3,   v);
+        else if (c==0x13c) emit(EV_KEY, map_home, v);
     } else if (ev->type == EV_ABS) {
         if (ev->code == 3) {
             int v = ev->value; if (inv_rx) v=-v;
@@ -151,7 +153,7 @@ static void sig_handler(int s) { running = 0; }
 int main(int argc, char *argv[])
 {
     if (argc < 3) {
-        fprintf(stdout,"ERROR:usage: uinput_setup <left> <right> [fuzz flat invLX invLY invRX invRY mapA mapB mapX mapY mapR mapZR mapPlus mapR3 mapL mapZL mapMinus mapL3]\n");
+        fprintf(stdout,"ERROR:usage: uinput_setup <left> <right> [fuzz flat invLX invLY invRX invRY mapA mapB mapX mapY mapR mapZR mapPlus mapR3 mapL mapZL mapMinus mapL3 mapHome]\n");
         fflush(stdout); return 1;
     }
 
@@ -175,6 +177,7 @@ int main(int argc, char *argv[])
     if (argc>18) map_zl     = atoi(argv[18]);
     if (argc>19) map_minus  = atoi(argv[19]);
     if (argc>20) map_l3     = atoi(argv[20]);
+    if (argc>21) map_home   = atoi(argv[21]);
 
     signal(SIGTERM, sig_handler);
     signal(SIGINT,  sig_handler);
