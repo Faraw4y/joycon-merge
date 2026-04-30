@@ -59,7 +59,6 @@ public class MergeService extends Service {
 
     public interface StatusCallback {
         void onStatus(String msg);
-        void onEvent(String event);
     }
 
     public class LocalBinder extends Binder {
@@ -93,13 +92,8 @@ public class MergeService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        setCallback(new StatusCallback() {
-            @Override public void onStatus(String msg) {
-                if (callback != null) callback.onStatus(msg);
-            }
-            @Override public void onEvent(String event) {
-                if (callback != null) callback.onEvent(event);
-            }
+        setCallback(msg -> {
+            if (callback != null) callback.onStatus(msg);
         });
     }
 

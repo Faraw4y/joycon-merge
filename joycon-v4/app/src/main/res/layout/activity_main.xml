@@ -215,23 +215,8 @@
                 android:visibility="gone">
 
                 <LinearLayout style="@style/Card" android:orientation="vertical">
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-                        <TextView android:text="LIVE EVENT LOG" style="@style/CardTitle"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"/>
-                        <Button android:id="@+id/btn_clear_test"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Clear"
-                            android:textSize="12sp"
-                            style="?android:attr/borderlessButtonStyle"/>
-                    </LinearLayout>
-                    <TextView android:text="Start merge then press any button — events appear here in real time."
+                    <TextView android:text="Live event log" style="@style/CardTitle"/>
+                    <TextView android:text="Start merge then press buttons to see events here."
                         android:textColor="@color/text_secondary"
                         android:textSize="12sp"
                         android:layout_width="match_parent"

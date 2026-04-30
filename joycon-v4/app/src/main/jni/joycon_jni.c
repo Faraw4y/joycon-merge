@@ -49,7 +49,7 @@ typedef struct {
 static Config cfg = {
     .stick_fuzz=256, .stick_flat=4096,
     .left_axis_x=0,  .left_axis_y=1,
-    .right_axis_x=0, .right_axis_y=1,   /* Joy-Con R sends stick as ABS_X/ABS_Y */
+    .right_axis_x=3, .right_axis_y=4,
     .code_a=304, .map_a=0x130, .code_b=305, .map_b=0x131,
     .code_x=307, .map_x=0x133, .code_y=308, .map_y=0x134,
     .code_r=0x136, .map_r=0x136, .code_zr=0x137, .map_zr=0x137,
@@ -71,7 +71,6 @@ static pthread_mutex_t dpad_mutex = PTHREAD_MUTEX_INITIALIZER;
 static JavaVM    *jvm        = NULL;
 static jobject    g_callback  = NULL;
 static jmethodID  g_onStatus  = NULL;
-static jmethodID  g_onEvent   = NULL;
 
 static void notify_status(const char *msg) {
     LOGI("%s", msg);
@@ -87,20 +86,7 @@ static void notify_status(const char *msg) {
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
-static void notify_event(const char *msg) {
-    if (!jvm || !g_callback || !g_onEvent) return;
-    JNIEnv *env; int attached = 0;
-    if ((*jvm)->GetEnv(jvm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
-        (*jvm)->AttachCurrentThread(jvm, &env, NULL);
-        attached = 1;
-    }
-    jstring jmsg = (*env)->NewStringUTF(env, msg);
-    (*env)->CallVoidMethod(env, g_callback, g_onEvent, jmsg);
-    (*env)->DeleteLocalRef(env, jmsg);
-    if (attached) (*jvm)->DetachCurrentThread(jvm);
-}
-
-
+static void notify_errno(const char *prefix) {
     char buf[256];
     snprintf(buf, sizeof(buf), "ERROR: %s: %s", prefix, strerror(errno));
     notify_status(buf);
@@ -120,14 +106,6 @@ static void emit(int type, int code, int value) {
 
 static int clamp(int v, int mn, int mx) { return v<mn?mn:v>mx?mx:v; }
 
-/* Software deadzone: if |v| <= flat, output 0. Also apply fuzz rounding. */
-static int apply_deadzone(int v) {
-    if (v > -cfg.stick_flat && v < cfg.stick_flat) return 0;
-    /* Round to fuzz bucket */
-    if (cfg.stick_fuzz > 1) v = (v / cfg.stick_fuzz) * cfg.stick_fuzz;
-    return clamp(v, -32768, 32767);
-}
-
 static void handle_dpad(int code, int value) {
     pthread_mutex_lock(&dpad_mutex);
     if (code == cfg.dpad_up)    dp_up    = value;
@@ -144,28 +122,21 @@ static void handle_dpad(int code, int value) {
 static void handle_left(struct input_event *ev) {
     if (ev->type == EV_KEY) {
         int c = ev->code, v = ev->value;
-        char ebuf[64];
-        if      (c == cfg.code_l)     { emit(EV_KEY, cfg.map_l,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[L] L pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_zl)    { emit(EV_KEY, cfg.map_zl,   v); if(v) { snprintf(ebuf,sizeof(ebuf),"[L] ZL pressed");   notify_event(ebuf); } }
-        else if (c == cfg.code_minus) { emit(EV_KEY, cfg.map_minus, v); if(v) { snprintf(ebuf,sizeof(ebuf),"[L] MINUS pressed");notify_event(ebuf); } }
-        else if (c == cfg.code_l3)    { emit(EV_KEY, cfg.map_l3,   v); if(v) { snprintf(ebuf,sizeof(ebuf),"[L] L3 pressed");   notify_event(ebuf); } }
+        if      (c == cfg.code_l)     emit(EV_KEY, cfg.map_l,    v);
+        else if (c == cfg.code_zl)    emit(EV_KEY, cfg.map_zl,   v);
+        else if (c == cfg.code_minus) emit(EV_KEY, cfg.map_minus, v);
+        else if (c == cfg.code_l3)    emit(EV_KEY, cfg.map_l3,   v);
         else if (c==cfg.dpad_up||c==cfg.dpad_down||
-                 c==cfg.dpad_left||c==cfg.dpad_right) {
+                 c==cfg.dpad_left||c==cfg.dpad_right)
             handle_dpad(c, v);
-            if(v) {
-                const char *dir = c==cfg.dpad_up?"UP":c==cfg.dpad_down?"DOWN":c==cfg.dpad_left?"LEFT":"RIGHT";
-                snprintf(ebuf,sizeof(ebuf),"[L] DPAD_%s",dir);
-                notify_event(ebuf);
-            }
-        }
     } else if (ev->type == EV_ABS) {
         int v = ev->value;
         if      (ev->code == cfg.left_axis_x) {
             if (cfg.inv_lx) v = -v;
-            emit(EV_ABS, ABS_X, apply_deadzone(v));
+            emit(EV_ABS, ABS_X, clamp(v,-32768,32767));
         } else if (ev->code == cfg.left_axis_y) {
             if (cfg.inv_ly) v = -v;
-            emit(EV_ABS, ABS_Y, apply_deadzone(v));
+            emit(EV_ABS, ABS_Y, clamp(v,-32768,32767));
         } else if (ev->code == ABS_HAT0X) {
             emit(EV_ABS, ABS_HAT0X, v);
         } else if (ev->code == ABS_HAT0Y) {
@@ -179,25 +150,22 @@ static void handle_left(struct input_event *ev) {
 static void handle_right(struct input_event *ev) {
     if (ev->type == EV_KEY) {
         int c = ev->code, v = ev->value;
-        char ebuf[64];
-        if      (c == cfg.code_a)    { emit(EV_KEY, cfg.map_a,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] A pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_b)    { emit(EV_KEY, cfg.map_b,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] B pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_x)    { emit(EV_KEY, cfg.map_x,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] X pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_y)    { emit(EV_KEY, cfg.map_y,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] Y pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_r)    { emit(EV_KEY, cfg.map_r,    v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] R pressed");    notify_event(ebuf); } }
-        else if (c == cfg.code_zr)   { emit(EV_KEY, cfg.map_zr,   v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] ZR pressed");   notify_event(ebuf); } }
-        else if (c == cfg.code_plus) { emit(EV_KEY, cfg.map_plus,  v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] PLUS pressed"); notify_event(ebuf); } }
-        else if (c == cfg.code_r3)   { emit(EV_KEY, cfg.map_r3,   v); if(v) { snprintf(ebuf,sizeof(ebuf),"[R] R3 pressed");   notify_event(ebuf); } }
+        if      (c == cfg.code_a)    emit(EV_KEY, cfg.map_a,    v);
+        else if (c == cfg.code_b)    emit(EV_KEY, cfg.map_b,    v);
+        else if (c == cfg.code_x)    emit(EV_KEY, cfg.map_x,    v);
+        else if (c == cfg.code_y)    emit(EV_KEY, cfg.map_y,    v);
+        else if (c == cfg.code_r)    emit(EV_KEY, cfg.map_r,    v);
+        else if (c == cfg.code_zr)   emit(EV_KEY, cfg.map_zr,   v);
+        else if (c == cfg.code_plus) emit(EV_KEY, cfg.map_plus,  v);
+        else if (c == cfg.code_r3)   emit(EV_KEY, cfg.map_r3,   v);
     } else if (ev->type == EV_ABS) {
         int v = ev->value;
-        /* Joy-Con R sends its stick as ABS_X(0)/ABS_Y(1), same as Left — handled here because
-         * this is the right-thread, so we remap to ABS_RX/ABS_RY on the virtual device. */
         if      (ev->code == cfg.right_axis_x) {
             if (cfg.inv_rx) v = -v;
-            emit(EV_ABS, ABS_RX, apply_deadzone(v));
+            emit(EV_ABS, ABS_RX, clamp(v,-32768,32767));
         } else if (ev->code == cfg.right_axis_y) {
             if (cfg.inv_ry) v = -v;
-            emit(EV_ABS, ABS_RY, apply_deadzone(v));
+            emit(EV_ABS, ABS_RY, clamp(v,-32768,32767));
         }
     } else if (ev->type == EV_SYN) {
         emit(EV_SYN, SYN_REPORT, 0);
@@ -235,7 +203,6 @@ Java_com_joyconmerge_MergeService_setCallback(JNIEnv *env, jobject thiz, jobject
     g_callback = (*env)->NewGlobalRef(env, cb);
     jclass cls = (*env)->GetObjectClass(env, cb);
     g_onStatus = (*env)->GetMethodID(env, cls, "onStatus", "(Ljava/lang/String;)V");
-    g_onEvent  = (*env)->GetMethodID(env, cls, "onEvent",  "(Ljava/lang/String;)V");
 }
 
 JNIEXPORT void JNICALL

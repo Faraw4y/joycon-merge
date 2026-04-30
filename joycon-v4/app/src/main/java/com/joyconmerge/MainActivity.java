@@ -63,14 +63,7 @@ public class MainActivity extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((MergeService.LocalBinder) binder).getService();
             bound = true;
-            service.setStatusCallback(new MergeService.StatusCallback() {
-                @Override public void onStatus(String msg) {
-                    runOnUiThread(() -> handleStatus(msg));
-                }
-                @Override public void onEvent(String event) {
-                    runOnUiThread(() -> appendTestEvent(event));
-                }
-            });
+            service.setStatusCallback(msg -> runOnUiThread(() -> handleStatus(msg)));
             updateToggleButton();
         }
         @Override
@@ -135,7 +128,6 @@ public class MainActivity extends AppCompatActivity {
         btnToggle.setOnClickListener(v -> toggleMerge());
         findViewById(R.id.btn_save_remap).setOnClickListener(v -> saveRemap());
         findViewById(R.id.btn_save_calib).setOnClickListener(v -> saveCalib());
-        findViewById(R.id.btn_clear_test).setOnClickListener(v -> tvTestOutput.setText(""));
     }
 
     private void setupTabs() {
@@ -253,7 +245,7 @@ public class MainActivity extends AppCompatActivity {
             config.getFuzz(), config.getFlat(),
             config.getInvLX()?1:0, config.getInvLY()?1:0,
             config.getInvRX()?1:0, config.getInvRY()?1:0,
-            0, 1, 0, 1,   /* Left stick: ABS_X/Y=0/1, Right stick raw also 0/1 on Joy-Con R */
+            0, 1, 3, 4,
             config.getCodeA(), config.getMapA(),
             config.getCodeB(), config.getMapB(),
             config.getCodeX(), config.getMapX(),
@@ -315,22 +307,7 @@ public class MainActivity extends AppCompatActivity {
             if (devs != null && !devs.equals("|")) tvDevices.setText(devs.replace("|", "\n"));
         }
         updateToggleButton();
-    }
-
-    private static final int MAX_TEST_LINES = 50;
-    private void appendTestEvent(String event) {
-        String current = tvTestOutput.getText().toString();
-        String[] lines = current.split("\n");
-        StringBuilder sb = new StringBuilder();
-        // Keep last MAX_TEST_LINES-1 lines to avoid unbounded growth
-        int start = Math.max(0, lines.length - (MAX_TEST_LINES - 1));
-        if (!current.isEmpty()) {
-            for (int i = start; i < lines.length; i++) {
-                sb.append(lines[i]).append("\n");
-            }
-        }
-        sb.append(event);
-        tvTestOutput.setText(sb.toString());
+        tvTestOutput.setText(tvTestOutput.getText() + "\n" + msg);
     }
 
     private void updateToggleButton() {
