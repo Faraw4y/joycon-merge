@@ -132,6 +132,15 @@ static void emit(int type, int code, int value) {
 static int clamp(int v, int mn, int mx) { return v<mn?mn:v>mx?mx:v; }
 
 /*
+ * Re-center: Joy-Con sticks send unsigned 0~0x7FFF with center ~0x4000.
+ * Subtract midpoint and scale to -32768~32767.
+ */
+static int recenter(int v) {
+    v = (v - 0x4000) * 2;
+    return clamp(v, -32768, 32767);
+}
+
+/*
  * BUG FIX #3: Hysteresis deadzone.
  *
  * *active tracks whether this axis is currently considered "outside" the
@@ -197,11 +206,13 @@ static void handle_left(struct input_event *ev) {
     } else if (ev->type == EV_ABS) {
         int v = ev->value;
         if      (ev->code == cfg.left_axis_x) {
-            if (cfg.inv_lx) v = -v;
-            emit(EV_ABS, ABS_X, apply_deadzone_hyst(v, &lx_active));
+            int v2 = recenter(ev->value);
+            if (cfg.inv_lx) v2 = -v2;
+            emit(EV_ABS, ABS_X, apply_deadzone_hyst(v2, &lx_active));
         } else if (ev->code == cfg.left_axis_y) {
-            if (cfg.inv_ly) v = -v;
-            emit(EV_ABS, ABS_Y, apply_deadzone_hyst(v, &ly_active));
+            int v2 = recenter(ev->value);
+            if (cfg.inv_ly) v2 = -v2;
+            emit(EV_ABS, ABS_Y, apply_deadzone_hyst(v2, &ly_active));
         } else if (ev->code == ABS_HAT0X) {
             emit(EV_ABS, ABS_HAT0X, v);
         } else if (ev->code == ABS_HAT0Y) {
@@ -235,11 +246,13 @@ static void handle_right(struct input_event *ev) {
          * deadzone and remap to ABS_RX/ABS_RY on the virtual device.
          */
         if      (ev->code == cfg.right_axis_x) {
-            if (cfg.inv_rx) v = -v;
-            emit(EV_ABS, ABS_RX, apply_deadzone_hyst(v, &rx_active));
+            int v2 = recenter(ev->value);
+            if (cfg.inv_rx) v2 = -v2;
+            emit(EV_ABS, ABS_RX, apply_deadzone_hyst(v2, &rx_active));
         } else if (ev->code == cfg.right_axis_y) {
-            if (cfg.inv_ry) v = -v;
-            emit(EV_ABS, ABS_RY, apply_deadzone_hyst(v, &ry_active));
+            int v2 = recenter(ev->value);
+            if (cfg.inv_ry) v2 = -v2;
+            emit(EV_ABS, ABS_RY, apply_deadzone_hyst(v2, &ry_active));
         }
     } else if (ev->type == EV_SYN) {
         emit(EV_SYN, SYN_REPORT, 0);
