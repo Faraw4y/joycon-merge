@@ -2,8 +2,6 @@ plugins {
     id 'com.android.application'
 }
 
-// Repositories now managed in settings.gradle
-
 android {
     namespace 'com.joyconmerge'
     compileSdk 34
@@ -14,8 +12,8 @@ android {
         applicationId "com.joyconmerge"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 3
+        versionName "3.0"
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
@@ -49,6 +47,39 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+/*
+ * Setelah NDK selesai kompilasi, salin binary uinput_setup
+ * ke folder assets sehingga ikut dalam APK.
+ *
+ * Hasilnya: assets/uinput_setup_arm64-v8a
+ *           assets/uinput_setup_armeabi-v7a
+ *
+ * MergeService.java akan extract binary yang sesuai ABI ke
+ * /data/data/<package>/files/ dan jalankan via root.
+ */
+afterEvaluate {
+    android.applicationVariants.all { variant ->
+        def variantName = variant.name.capitalize()
+
+        // Task copy untuk setiap ABI
+        ['arm64-v8a', 'armeabi-v7a'].each { abi ->
+            def copyTask = tasks.register("copyUinputSetup_${abi}_${variantName}", Copy) {
+                def buildDir = layout.buildDirectory.get().asFile
+                from "${buildDir}/intermediates/cmake/${variant.name}/obj/${abi}/uinput_setup"
+                into "src/main/assets"
+                rename { "uinput_setup_${abi}" }
+                // Jalankan setelah CMake build selesai
+                dependsOn "buildCMake${variantName}[${abi}]"
+            }
+
+            // Pastikan assets ter-copy sebelum proses merge assets
+            tasks.named("merge${variantName}Assets").configure {
+                dependsOn copyTask
+            }
+        }
     }
 }
 

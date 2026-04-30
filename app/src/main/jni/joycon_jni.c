@@ -11,15 +11,26 @@
 #include <linux/uinput.h>
 #include <sys/ioctl.h>
 
-#define TAG "JoyConMerge"
+#define TAG  "JoyConMerge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-#define UINPUT_PATH  "/dev/uinput"
-#define INPUT_DIR    "/dev/input"
-#define VIRT_NAME    "Nintendo Switch Combined Joy-Con"
-#define VENDOR_ID    0x057e
-#define PRODUCT_ID   0x2009
+/*
+ * ARCHITECTURE v3 — "root owns uinput setup, JNI just maps events"
+ *
+ * Root shell:
+ *   1. cat /dev/input/eventL > pipe_L_write  (kita baca pipe_L_read)
+ *   2. cat /dev/input/eventR > pipe_R_write  (kita baca pipe_R_read)
+ *   3. Buka /dev/uinput, jalankan SEMUA ioctl + UI_DEV_CREATE
+ *   4. Setelah UINPUT_READY dicetak, masuk mode:
+ *         cat pipe_U_read >> /dev/uinput_fd   (kita tulis ke pipe_U_write)
+ *
+ * JNI tidak pernah open() /dev/* — tidak perlu akses SELinux apapun.
+ */
+
+#define VIRT_NAME  "Nintendo Switch Combined Joy-Con"
+#define VENDOR_ID  0x057e
+#define PRODUCT_ID 0x2009
 
 typedef struct {
     int stick_fuzz, stick_flat;
@@ -37,183 +48,174 @@ typedef struct {
 
 static Config cfg = {
     .stick_fuzz=256, .stick_flat=4096,
-    .left_axis_x=0,.left_axis_y=1,
-    .right_axis_x=3,.right_axis_y=4,
-    .code_a=304,.map_a=0x130, .code_b=305,.map_b=0x131,
-    .code_x=307,.map_x=0x133, .code_y=308,.map_y=0x134,
-    .code_r=0x136,.map_r=0x136, .code_zr=0x137,.map_zr=0x137,
-    .code_plus=0x13b,.map_plus=0x13b, .code_r3=0x13d,.map_r3=0x13d,
-    .code_l=0x135,.map_l=0x135, .code_zl=0x139,.map_zl=0x139,
-    .code_minus=0x13a,.map_minus=0x13a, .code_l3=0x13c,.map_l3=0x13c,
-    .dpad_up=544,.dpad_down=545,.dpad_left=546,.dpad_right=547
+    .left_axis_x=0,  .left_axis_y=1,
+    .right_axis_x=3, .right_axis_y=4,
+    .code_a=304, .map_a=0x130, .code_b=305, .map_b=0x131,
+    .code_x=307, .map_x=0x133, .code_y=308, .map_y=0x134,
+    .code_r=0x136, .map_r=0x136, .code_zr=0x137, .map_zr=0x137,
+    .code_plus=0x13b, .map_plus=0x13b, .code_r3=0x13d, .map_r3=0x13d,
+    .code_l=0x135, .map_l=0x135, .code_zl=0x139, .map_zl=0x139,
+    .code_minus=0x13a, .map_minus=0x13a, .code_l3=0x13c, .map_l3=0x13c,
+    .dpad_up=544, .dpad_down=545, .dpad_left=546, .dpad_right=547
 };
 
-static int uinput_fd=-1, left_fd=-1, right_fd=-1;
-static volatile int running=0;
+static int uinput_pipe_fd = -1;
+static int left_fd  = -1;
+static int right_fd = -1;
+static volatile int running = 0;
 static pthread_t thread_left, thread_right;
-static char left_path[64]={0}, right_path[64]={0};
-static int dp_up=0,dp_down=0,dp_left=0,dp_right=0;
+
+static int dp_up=0, dp_down=0, dp_left=0, dp_right=0;
 static pthread_mutex_t dpad_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static JavaVM *jvm=NULL;
-static jobject g_callback=NULL;
-static jmethodID g_onStatus=NULL;
+static JavaVM    *jvm        = NULL;
+static jobject    g_callback  = NULL;
+static jmethodID  g_onStatus  = NULL;
 
 static void notify_status(const char *msg) {
     LOGI("%s", msg);
     if (!jvm || !g_callback) return;
-    JNIEnv *env;
-    int attached=0;
-    if ((*jvm)->GetEnv(jvm,(void**)&env,JNI_VERSION_1_6)!=JNI_OK) {
-        (*jvm)->AttachCurrentThread(jvm,&env,NULL);
-        attached=1;
+    JNIEnv *env; int attached = 0;
+    if ((*jvm)->GetEnv(jvm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        (*jvm)->AttachCurrentThread(jvm, &env, NULL);
+        attached = 1;
     }
-    jstring jmsg=(*env)->NewStringUTF(env,msg);
-    (*env)->CallVoidMethod(env,g_callback,g_onStatus,jmsg);
-    (*env)->DeleteLocalRef(env,jmsg);
+    jstring jmsg = (*env)->NewStringUTF(env, msg);
+    (*env)->CallVoidMethod(env, g_callback, g_onStatus, jmsg);
+    (*env)->DeleteLocalRef(env, jmsg);
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
 static void notify_errno(const char *prefix) {
     char buf[256];
-    snprintf(buf,sizeof(buf),"ERROR: %s: %s", prefix, strerror(errno));
+    snprintf(buf, sizeof(buf), "ERROR: %s: %s", prefix, strerror(errno));
     notify_status(buf);
 }
 
-static void emit(int type,int code,int value) {
+/* Kirim satu input_event ke pipe → root forward ke /dev/uinput */
+static void emit(int type, int code, int value) {
+    if (uinput_pipe_fd < 0) return;
     struct input_event ev;
-    memset(&ev,0,sizeof(ev));
-    ev.type=type; ev.code=code; ev.value=value;
-    write(uinput_fd,&ev,sizeof(ev));
+    memset(&ev, 0, sizeof(ev));
+    ev.type  = type;
+    ev.code  = code;
+    ev.value = value;
+    ssize_t n = write(uinput_pipe_fd, &ev, sizeof(ev));
+    (void)n;
 }
 
-static int clamp(int v,int mn,int mx){ return v<mn?mn:v>mx?mx:v; }
+static int clamp(int v, int mn, int mx) { return v<mn?mn:v>mx?mx:v; }
 
-static void handle_dpad(int code,int value) {
+static void handle_dpad(int code, int value) {
     pthread_mutex_lock(&dpad_mutex);
-    if (code==cfg.dpad_up)    dp_up=value;
-    if (code==cfg.dpad_down)  dp_down=value;
-    if (code==cfg.dpad_left)  dp_left=value;
-    if (code==cfg.dpad_right) dp_right=value;
-    int hx=dp_right-dp_left, hy=dp_down-dp_up;
+    if (code == cfg.dpad_up)    dp_up    = value;
+    if (code == cfg.dpad_down)  dp_down  = value;
+    if (code == cfg.dpad_left)  dp_left  = value;
+    if (code == cfg.dpad_right) dp_right = value;
+    int hx = dp_right - dp_left;
+    int hy = dp_down  - dp_up;
     pthread_mutex_unlock(&dpad_mutex);
-    emit(EV_ABS,ABS_HAT0X,hx);
-    emit(EV_ABS,ABS_HAT0Y,hy);
+    emit(EV_ABS, ABS_HAT0X, hx);
+    emit(EV_ABS, ABS_HAT0Y, hy);
 }
 
 static void handle_left(struct input_event *ev) {
-    if (ev->type==EV_KEY) {
-        int c=ev->code,v=ev->value;
-        if      (c==cfg.code_l)     emit(EV_KEY,cfg.map_l,v);
-        else if (c==cfg.code_zl)    emit(EV_KEY,cfg.map_zl,v);
-        else if (c==cfg.code_minus) emit(EV_KEY,cfg.map_minus,v);
-        else if (c==cfg.code_l3)    emit(EV_KEY,cfg.map_l3,v);
+    if (ev->type == EV_KEY) {
+        int c = ev->code, v = ev->value;
+        if      (c == cfg.code_l)     emit(EV_KEY, cfg.map_l,    v);
+        else if (c == cfg.code_zl)    emit(EV_KEY, cfg.map_zl,   v);
+        else if (c == cfg.code_minus) emit(EV_KEY, cfg.map_minus, v);
+        else if (c == cfg.code_l3)    emit(EV_KEY, cfg.map_l3,   v);
         else if (c==cfg.dpad_up||c==cfg.dpad_down||
                  c==cfg.dpad_left||c==cfg.dpad_right)
-            handle_dpad(c,v);
-    } else if (ev->type==EV_ABS) {
-        int v=ev->value;
-        if      (ev->code==cfg.left_axis_x) { if(cfg.inv_lx)v=-v; emit(EV_ABS,ABS_X,clamp(v,-32768,32767)); }
-        else if (ev->code==cfg.left_axis_y) { if(cfg.inv_ly)v=-v; emit(EV_ABS,ABS_Y,clamp(v,-32768,32767)); }
-        else if (ev->code==ABS_HAT0X)       emit(EV_ABS,ABS_HAT0X,v);
-        else if (ev->code==ABS_HAT0Y)       emit(EV_ABS,ABS_HAT0Y,v);
-    } else if (ev->type==EV_SYN) emit(EV_SYN,SYN_REPORT,0);
+            handle_dpad(c, v);
+    } else if (ev->type == EV_ABS) {
+        int v = ev->value;
+        if      (ev->code == cfg.left_axis_x) {
+            if (cfg.inv_lx) v = -v;
+            emit(EV_ABS, ABS_X, clamp(v,-32768,32767));
+        } else if (ev->code == cfg.left_axis_y) {
+            if (cfg.inv_ly) v = -v;
+            emit(EV_ABS, ABS_Y, clamp(v,-32768,32767));
+        } else if (ev->code == ABS_HAT0X) {
+            emit(EV_ABS, ABS_HAT0X, v);
+        } else if (ev->code == ABS_HAT0Y) {
+            emit(EV_ABS, ABS_HAT0Y, v);
+        }
+    } else if (ev->type == EV_SYN) {
+        emit(EV_SYN, SYN_REPORT, 0);
+    }
 }
 
 static void handle_right(struct input_event *ev) {
-    if (ev->type==EV_KEY) {
-        int c=ev->code,v=ev->value;
-        if      (c==cfg.code_a)    emit(EV_KEY,cfg.map_a,v);
-        else if (c==cfg.code_b)    emit(EV_KEY,cfg.map_b,v);
-        else if (c==cfg.code_x)    emit(EV_KEY,cfg.map_x,v);
-        else if (c==cfg.code_y)    emit(EV_KEY,cfg.map_y,v);
-        else if (c==cfg.code_r)    emit(EV_KEY,cfg.map_r,v);
-        else if (c==cfg.code_zr)   emit(EV_KEY,cfg.map_zr,v);
-        else if (c==cfg.code_plus) emit(EV_KEY,cfg.map_plus,v);
-        else if (c==cfg.code_r3)   emit(EV_KEY,cfg.map_r3,v);
-    } else if (ev->type==EV_ABS) {
-        int v=ev->value;
-        if      (ev->code==cfg.right_axis_x) { if(cfg.inv_rx)v=-v; emit(EV_ABS,ABS_RX,clamp(v,-32768,32767)); }
-        else if (ev->code==cfg.right_axis_y) { if(cfg.inv_ry)v=-v; emit(EV_ABS,ABS_RY,clamp(v,-32768,32767)); }
-    } else if (ev->type==EV_SYN) emit(EV_SYN,SYN_REPORT,0);
+    if (ev->type == EV_KEY) {
+        int c = ev->code, v = ev->value;
+        if      (c == cfg.code_a)    emit(EV_KEY, cfg.map_a,    v);
+        else if (c == cfg.code_b)    emit(EV_KEY, cfg.map_b,    v);
+        else if (c == cfg.code_x)    emit(EV_KEY, cfg.map_x,    v);
+        else if (c == cfg.code_y)    emit(EV_KEY, cfg.map_y,    v);
+        else if (c == cfg.code_r)    emit(EV_KEY, cfg.map_r,    v);
+        else if (c == cfg.code_zr)   emit(EV_KEY, cfg.map_zr,   v);
+        else if (c == cfg.code_plus) emit(EV_KEY, cfg.map_plus,  v);
+        else if (c == cfg.code_r3)   emit(EV_KEY, cfg.map_r3,   v);
+    } else if (ev->type == EV_ABS) {
+        int v = ev->value;
+        if      (ev->code == cfg.right_axis_x) {
+            if (cfg.inv_rx) v = -v;
+            emit(EV_ABS, ABS_RX, clamp(v,-32768,32767));
+        } else if (ev->code == cfg.right_axis_y) {
+            if (cfg.inv_ry) v = -v;
+            emit(EV_ABS, ABS_RY, clamp(v,-32768,32767));
+        }
+    } else if (ev->type == EV_SYN) {
+        emit(EV_SYN, SYN_REPORT, 0);
+    }
 }
 
 static void *thread_read_left(void *arg) {
     struct input_event ev;
     notify_status("Left Joy-Con reader started");
-    while (running && read(left_fd,&ev,sizeof(ev))==sizeof(ev)) handle_left(&ev);
+    while (running && read(left_fd, &ev, sizeof(ev)) == sizeof(ev))
+        handle_left(&ev);
     notify_status("Left Joy-Con reader stopped");
     return NULL;
 }
+
 static void *thread_read_right(void *arg) {
     struct input_event ev;
     notify_status("Right Joy-Con reader started");
-    while (running && read(right_fd,&ev,sizeof(ev))==sizeof(ev)) handle_right(&ev);
+    while (running && read(right_fd, &ev, sizeof(ev)) == sizeof(ev))
+        handle_right(&ev);
     notify_status("Right Joy-Con reader stopped");
     return NULL;
 }
 
-static int setup_uinput(int given_fd) {
-    notify_status("Setting up /dev/uinput...");
-    uinput_fd = dup(given_fd);
-    if (uinput_fd<0) { notify_errno("dup uinput fd"); return -1; }
-
-    ioctl(uinput_fd,UI_SET_EVBIT,EV_KEY);
-    ioctl(uinput_fd,UI_SET_EVBIT,EV_ABS);
-    ioctl(uinput_fd,UI_SET_EVBIT,EV_SYN);
-    int keys[]={0x130,0x131,0x132,0x133,0x134,0x135,0x136,
-                0x137,0x138,0x139,0x13a,0x13b,0x13c,0x13d,0x13e};
-    for (int i=0;i<15;i++) ioctl(uinput_fd,UI_SET_KEYBIT,keys[i]);
-    int abits[]={ABS_X,ABS_Y,ABS_RX,ABS_RY,ABS_HAT0X,ABS_HAT0Y};
-    for (int i=0;i<6;i++) ioctl(uinput_fd,UI_SET_ABSBIT,abits[i]);
-
-    struct uinput_user_dev uidev;
-    memset(&uidev,0,sizeof(uidev));
-    snprintf(uidev.name,UINPUT_MAX_NAME_SIZE,VIRT_NAME);
-    uidev.id.bustype=BUS_VIRTUAL;
-    uidev.id.vendor=VENDOR_ID;
-    uidev.id.product=PRODUCT_ID;
-    uidev.id.version=1;
-    int axes[]={ABS_X,ABS_Y,ABS_RX,ABS_RY};
-    for (int i=0;i<4;i++) {
-        uidev.absmin[axes[i]]=-32768; uidev.absmax[axes[i]]=32767;
-        uidev.absfuzz[axes[i]]=cfg.stick_fuzz; uidev.absflat[axes[i]]=cfg.stick_flat;
-    }
-    uidev.absmin[ABS_HAT0X]=-1; uidev.absmax[ABS_HAT0X]=1;
-    uidev.absmin[ABS_HAT0Y]=-1; uidev.absmax[ABS_HAT0Y]=1;
-
-    if (write(uinput_fd,&uidev,sizeof(uidev))<0) { notify_errno("write uinput_user_dev"); return -1; }
-    if (ioctl(uinput_fd,UI_DEV_CREATE)<0)         { notify_errno("UI_DEV_CREATE"); return -1; }
-
-    int ca[]={ABS_X,ABS_Y,ABS_RX,ABS_RY};
-    for (int i=0;i<4;i++) emit(EV_ABS,ca[i],0);
-    emit(EV_SYN,SYN_REPORT,0);
-    notify_status("Virtual gamepad created");
-    return 0;
-}
-
-/* ---- JNI exports ---- */
+/* ================================================================ */
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-    jvm=vm; return JNI_VERSION_1_6;
+    jvm = vm;
+    return JNI_VERSION_1_6;
 }
 
 JNIEXPORT void JNICALL
-Java_com_joyconmerge_MergeService_setCallback(JNIEnv *env,jobject thiz,jobject cb) {
-    if (g_callback) (*env)->DeleteGlobalRef(env,g_callback);
-    g_callback=(*env)->NewGlobalRef(env,cb);
-    jclass cls=(*env)->GetObjectClass(env,cb);
-    g_onStatus=(*env)->GetMethodID(env,cls,"onStatus","(Ljava/lang/String;)V");
+Java_com_joyconmerge_MergeService_setCallback(JNIEnv *env, jobject thiz, jobject cb) {
+    if (g_callback) (*env)->DeleteGlobalRef(env, g_callback);
+    g_callback = (*env)->NewGlobalRef(env, cb);
+    jclass cls = (*env)->GetObjectClass(env, cb);
+    g_onStatus = (*env)->GetMethodID(env, cls, "onStatus", "(Ljava/lang/String;)V");
 }
 
 JNIEXPORT void JNICALL
-Java_com_joyconmerge_MergeService_setConfig(JNIEnv *env,jobject thiz,
-    jint fuzz,jint flat,jint invLX,jint invLY,jint invRX,jint invRY,
-    jint laxX,jint laxY,jint raxX,jint raxY,
-    jint cA,jint mA,jint cB,jint mB,jint cX,jint mX,jint cY,jint mY,
-    jint cR,jint mR,jint cZR,jint mZR,jint cPlus,jint mPlus,jint cR3,jint mR3,
-    jint cL,jint mL,jint cZL,jint mZL,jint cMinus,jint mMinus,jint cL3,jint mL3,
-    jint dpUp,jint dpDown,jint dpLeft,jint dpRight)
+Java_com_joyconmerge_MergeService_setConfig(JNIEnv *env, jobject thiz,
+    jint fuzz, jint flat, jint invLX, jint invLY, jint invRX, jint invRY,
+    jint laxX, jint laxY, jint raxX, jint raxY,
+    jint cA, jint mA, jint cB, jint mB,
+    jint cX, jint mX, jint cY, jint mY,
+    jint cR, jint mR, jint cZR, jint mZR,
+    jint cPlus, jint mPlus, jint cR3, jint mR3,
+    jint cL, jint mL, jint cZL, jint mZL,
+    jint cMinus, jint mMinus, jint cL3, jint mL3,
+    jint dpUp, jint dpDown, jint dpLeft, jint dpRight)
 {
     cfg.stick_fuzz=fuzz; cfg.stick_flat=flat;
     cfg.inv_lx=invLX; cfg.inv_ly=invLY; cfg.inv_rx=invRX; cfg.inv_ry=invRY;
@@ -225,64 +227,49 @@ Java_com_joyconmerge_MergeService_setConfig(JNIEnv *env,jobject thiz,
     cfg.code_plus=cPlus; cfg.map_plus=mPlus; cfg.code_r3=cR3; cfg.map_r3=mR3;
     cfg.code_l=cL; cfg.map_l=mL; cfg.code_zl=cZL; cfg.map_zl=mZL;
     cfg.code_minus=cMinus; cfg.map_minus=mMinus; cfg.code_l3=cL3; cfg.map_l3=mL3;
-    cfg.dpad_up=dpUp; cfg.dpad_down=dpDown; cfg.dpad_left=dpLeft; cfg.dpad_right=dpRight;
+    cfg.dpad_up=dpUp; cfg.dpad_down=dpDown;
+    cfg.dpad_left=dpLeft; cfg.dpad_right=dpRight;
 }
 
-/* Legacy path-based startMerge — kept for reference but NOT used.
-   SELinux on KernelSU blocks open() of /dev/input/event* from app UID
-   even after chmod, so we use startMergeWithFds instead. */
+/*
+ * Dipanggil setelah root selesai setup uinput (sudah UI_DEV_CREATE)
+ * dan sudah mulai forward dari pipe ke /dev/uinput.
+ *
+ * leftFd   = read-end pipe dari root cat /dev/input/eventL
+ * rightFd  = read-end pipe dari root cat /dev/input/eventR
+ * uinputFd = write-end pipe; root membaca dan menulis ke /dev/uinput
+ */
 JNIEXPORT jint JNICALL
-Java_com_joyconmerge_MergeService_startMerge(JNIEnv *env,jobject thiz,
-    jstring jLeftPath, jstring jRightPath) {
-    notify_status("ERROR: startMerge(path) called — use startMergeWithFds instead");
-    return -1;
-}
-
-/* NEW: Accept already-open file descriptors from the Java layer.
-   Java opens them inside a root shell (via pipe + cat) and passes
-   the read-end fds here. SELinux never sees our process doing the
-   open() — root did it, we just inherit the fd. */
-JNIEXPORT jint JNICALL
-Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env,jobject thiz,
-    jint jLeftFd, jint jRightFd, jint jUinputFd) {
+Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env, jobject thiz,
+    jint jLeftFd, jint jRightFd, jint jUinputFd)
+{
     if (running) return 0;
 
-    /* dup() the fds so Java can close its ParcelFileDescriptor handles
-       without affecting our reads. */
-    left_fd  = dup(jLeftFd);
-    right_fd = dup(jRightFd);
+    left_fd        = dup(jLeftFd);
+    right_fd       = dup(jRightFd);
+    uinput_pipe_fd = dup(jUinputFd);
 
-    if (left_fd < 0)  { notify_errno("dup left fd");  return -1; }
-    if (right_fd < 0) { notify_errno("dup right fd"); return -1; }
+    if (left_fd < 0)        { notify_errno("dup left fd");   return -1; }
+    if (right_fd < 0)       { notify_errno("dup right fd");  return -1; }
+    if (uinput_pipe_fd < 0) { notify_errno("dup uinput fd"); return -1; }
 
-    /* Note: EVIOCGRAB is intentionally skipped here.
-       We are reading from a pipe, not the raw device node, so grab
-       would fail with ENOTTY. The root-side `cat` process holds the
-       device open exclusively; stopping the root shell stops input. */
-
-    if (setup_uinput(jUinputFd)<0) return -1;
-
-    running=1;
-    pthread_create(&thread_left,  NULL,thread_read_left,  NULL);
-    pthread_create(&thread_right, NULL,thread_read_right, NULL);
+    running = 1;
+    pthread_create(&thread_left,  NULL, thread_read_left,  NULL);
+    pthread_create(&thread_right, NULL, thread_read_right, NULL);
     notify_status("RUNNING");
     return 0;
 }
 
 JNIEXPORT void JNICALL
-Java_com_joyconmerge_MergeService_stopMerge(JNIEnv *env,jobject thiz) {
-    running=0;
-    if (left_fd>=0)   { close(left_fd);   left_fd=-1; }
-    if (right_fd>=0)  { close(right_fd);  right_fd=-1; }
-    if (uinput_fd>=0) { ioctl(uinput_fd,UI_DEV_DESTROY); close(uinput_fd); uinput_fd=-1; }
-    /* Restore permissions */
-    system("su -c 'chmod 600 /dev/uinput; chmod 640 /dev/input/event*'");
+Java_com_joyconmerge_MergeService_stopMerge(JNIEnv *env, jobject thiz) {
+    running = 0;
+    if (left_fd >= 0)        { close(left_fd);        left_fd        = -1; }
+    if (right_fd >= 0)       { close(right_fd);       right_fd       = -1; }
+    if (uinput_pipe_fd >= 0) { close(uinput_pipe_fd); uinput_pipe_fd = -1; }
     notify_status("STOPPED");
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_joyconmerge_MergeService_getFoundDevices(JNIEnv *env,jobject thiz) {
-    char buf[128];
-    snprintf(buf,sizeof(buf),"%s|%s",left_path,right_path);
-    return (*env)->NewStringUTF(env,buf);
+Java_com_joyconmerge_MergeService_getFoundDevices(JNIEnv *env, jobject thiz) {
+    return (*env)->NewStringUTF(env, "");
 }
