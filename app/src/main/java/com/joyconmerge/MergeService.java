@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
 import androidx.core.app.NotificationCompat;
+import java.io.DataOutputStream;
+import java.io.IOException;
 
 public class MergeService extends Service {
 
@@ -65,10 +67,17 @@ public class MergeService extends Service {
         if (ACTION_START.equals(action)) {
             startForeground(NOTIF_ID, buildNotification("Running — Joy-Cons merged"));
             new Thread(() -> {
+                // Use root shell to open up /dev/input and /dev/uinput
+                // so our process can then access them directly
+                boolean rootOk = grantDevicePermissions();
+                if (!rootOk) {
+                    notifyStatus("ERROR: Could not get root shell — grant root in KernelSU");
+                    return;
+                }
                 int result = startMerge();
                 merging = result == 0;
-                if (!merging && callback != null)
-                    callback.onStatus("ERROR: startMerge failed");
+                if (!merging)
+                    notifyStatus("ERROR: startMerge failed after root grant");
             }).start();
         } else if (ACTION_STOP.equals(action)) {
             stopMerge();
@@ -77,6 +86,36 @@ public class MergeService extends Service {
             stopSelf();
         }
         return START_STICKY;
+    }
+
+    /**
+     * Open a root shell and chmod /dev/input + /dev/uinput so the
+     * app process (which runs as app UID) can read/write them.
+     */
+    private boolean grantDevicePermissions() {
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            DataOutputStream os = new DataOutputStream(su.getOutputStream());
+
+            // Make /dev/input directory and all event nodes readable
+            os.writeBytes("chmod 755 /dev/input\n");
+            os.writeBytes("chmod 644 /dev/input/event*\n");
+            // Make uinput writable
+            os.writeBytes("chmod 666 /dev/uinput\n");
+            os.writeBytes("exit\n");
+            os.flush();
+
+            int exit = su.waitFor();
+            notifyStatus("Root shell exit code: " + exit);
+            return exit == 0;
+        } catch (IOException | InterruptedException e) {
+            notifyStatus("ERROR: su failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void notifyStatus(String msg) {
+        if (callback != null) callback.onStatus(msg);
     }
 
     public void setStatusCallback(StatusCallback cb) { this.callback = cb; }

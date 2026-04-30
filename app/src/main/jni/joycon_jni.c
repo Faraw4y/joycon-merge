@@ -11,6 +11,7 @@
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 
 #define TAG "JoyConMerge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -75,16 +76,56 @@ static void notify_status(const char *msg) {
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
-/* Notify with errno detail */
 static void notify_errno(const char *prefix) {
     char buf[256];
     snprintf(buf,sizeof(buf),"ERROR: %s: %s", prefix, strerror(errno));
     notify_status(buf);
 }
 
-static int find_joycons(void) {
+/*
+ * Open a file descriptor via "su -c" so the open() runs as root.
+ * We do: su -c "exec 3>/dev/uinput; cat /proc/self/fd/3" but that's complex.
+ * Simpler: use su to chmod the file temporarily, open it, then restore.
+ * Even simpler: run su -c "chmod o+rw /dev/input && chmod o+rw /dev/uinput"
+ * to grant world access, open the files normally, then tighten back.
+ */
+static int su_chmod(const char *path, const char *mode) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "su -c 'chmod %s %s'", mode, path);
+    int ret = system(cmd);
+    return WEXITSTATUS(ret);
+}
+
+static int open_as_root(const char *path, int flags) {
+    /* First try direct open - might work if selinux is permissive */
+    int fd = open(path, flags);
+    if (fd >= 0) return fd;
+
+    /* Try via su chmod to grant temporary access */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "su -c \"chmod 666 '%s'\"", path);
+    int r = system(cmd);
+    if (WEXITSTATUS(r) != 0) {
+        notify_status("ERROR: su chmod failed - is root granted in KernelSU?");
+        return -1;
+    }
+    fd = open(path, flags);
+    return fd;
+}
+
+static int find_joycons_as_root(void) {
     memset(left_path,0,sizeof(left_path));
     memset(right_path,0,sizeof(right_path));
+
+    /* Grant read access to all event nodes via su */
+    notify_status("Requesting root access to /dev/input...");
+    int r = system("su -c 'chmod 644 /dev/input/event*'");
+    if (WEXITSTATUS(r) != 0) {
+        notify_status("ERROR: su failed - grant root to Joy-Con Merge in KernelSU, then retry");
+        return -1;
+    }
+    notify_status("Root access granted, scanning devices...");
+
     DIR *dir=opendir(INPUT_DIR);
     if (!dir) { notify_errno("opendir /dev/input"); return -1; }
     struct dirent *entry;
@@ -97,6 +138,7 @@ static int find_joycons(void) {
         char name[256]={0};
         ioctl(fd,EVIOCGNAME(sizeof(name)),name);
         close(fd);
+        LOGI("Device: %s -> %s", path, name);
         if (strcasestr(name,"Left Joy-Con") && !left_path[0])
             snprintf(left_path,sizeof(left_path),"%s",path);
         else if (strcasestr(name,"Right Joy-Con") && !right_path[0])
@@ -104,10 +146,11 @@ static int find_joycons(void) {
         if (left_path[0] && right_path[0]) break;
     }
     closedir(dir);
-    if (!left_path[0])  { notify_status("ERROR: Left Joy-Con not found in /dev/input — is it paired via Bluetooth?");  return -1; }
-    if (!right_path[0]) { notify_status("ERROR: Right Joy-Con not found in /dev/input — is it paired via Bluetooth?"); return -1; }
+
+    if (!left_path[0])  { notify_status("ERROR: Left Joy-Con not found - is it paired via Bluetooth?");  return -1; }
+    if (!right_path[0]) { notify_status("ERROR: Right Joy-Con not found - is it paired via Bluetooth?"); return -1; }
     char msg[128];
-    snprintf(msg,sizeof(msg),"Found L:%s  R:%s",left_path,right_path);
+    snprintf(msg,sizeof(msg),"Found: L=%s  R=%s",left_path,right_path);
     notify_status(msg);
     return 0;
 }
@@ -186,8 +229,16 @@ static void *thread_read_right(void *arg) {
 }
 
 static int setup_uinput(void) {
+    /* Grant write access to /dev/uinput via su */
+    notify_status("Opening /dev/uinput...");
+    int r = system("su -c 'chmod 666 /dev/uinput'");
+    if (WEXITSTATUS(r) != 0) {
+        notify_status("ERROR: su chmod /dev/uinput failed");
+        return -1;
+    }
+
     uinput_fd=open(UINPUT_PATH,O_WRONLY|O_NONBLOCK);
-    if (uinput_fd<0) { notify_errno("open /dev/uinput (needs root or uinput group)"); return -1; }
+    if (uinput_fd<0) { notify_errno("open /dev/uinput"); return -1; }
 
     ioctl(uinput_fd,UI_SET_EVBIT,EV_KEY);
     ioctl(uinput_fd,UI_SET_EVBIT,EV_ABS);
@@ -219,6 +270,7 @@ static int setup_uinput(void) {
     int ca[]={ABS_X,ABS_Y,ABS_RX,ABS_RY};
     for (int i=0;i<4;i++) emit(EV_ABS,ca[i],0);
     emit(EV_SYN,SYN_REPORT,0);
+    notify_status("Virtual gamepad created");
     return 0;
 }
 
@@ -261,14 +313,14 @@ Java_com_joyconmerge_MergeService_setConfig(JNIEnv *env,jobject thiz,
 JNIEXPORT jint JNICALL
 Java_com_joyconmerge_MergeService_startMerge(JNIEnv *env,jobject thiz) {
     if (running) return 0;
-    if (find_joycons()<0) return -1;
+    if (find_joycons_as_root()<0) return -1;
 
     left_fd=open(left_path,O_RDONLY);
-    if (left_fd<0) { notify_errno("open Left Joy-Con (needs root)"); return -1; }
+    if (left_fd<0) { notify_errno("open Left Joy-Con"); return -1; }
     ioctl(left_fd,EVIOCGRAB,1);
 
     right_fd=open(right_path,O_RDONLY);
-    if (right_fd<0) { notify_errno("open Right Joy-Con (needs root)"); return -1; }
+    if (right_fd<0) { notify_errno("open Right Joy-Con"); return -1; }
     ioctl(right_fd,EVIOCGRAB,1);
 
     if (setup_uinput()<0) return -1;
@@ -286,6 +338,8 @@ Java_com_joyconmerge_MergeService_stopMerge(JNIEnv *env,jobject thiz) {
     if (left_fd>=0)   { ioctl(left_fd,EVIOCGRAB,0);  close(left_fd);   left_fd=-1; }
     if (right_fd>=0)  { ioctl(right_fd,EVIOCGRAB,0); close(right_fd);  right_fd=-1; }
     if (uinput_fd>=0) { ioctl(uinput_fd,UI_DEV_DESTROY); close(uinput_fd); uinput_fd=-1; }
+    /* Restore permissions */
+    system("su -c 'chmod 600 /dev/uinput; chmod 640 /dev/input/event*'");
     notify_status("STOPPED");
 }
 
