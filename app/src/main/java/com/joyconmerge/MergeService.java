@@ -35,10 +35,10 @@ public class MergeService extends Service {
     private final IBinder binder = new LocalBinder();
     private StatusCallback callback;
     private boolean merging = false;
-    private Process pipingProcess = null; // root shell piping events to us
+    private Process pipingProcess = null;
 
-    /* JNI */
-    public native int  startMergeWithFds(int leftFd, int rightFd);
+    /* JNI — three fds: left input, right input, uinput output */
+    public native int  startMergeWithFds(int leftFd, int rightFd, int uinputFd);
     public native void stopMerge();
     public native void setCallback(StatusCallback cb);
     public native void setConfig(
@@ -55,7 +55,9 @@ public class MergeService extends Service {
     );
     public native String getFoundDevices();
 
-    // Kept for display purposes
+    // Legacy — not used
+    public native int startMerge(String leftPath, String rightPath);
+
     private String resolvedLeftPath  = "";
     private String resolvedRightPath = "";
 
@@ -82,10 +84,7 @@ public class MergeService extends Service {
             }).start();
         } else if (ACTION_STOP.equals(action)) {
             stopMerge();
-            if (pipingProcess != null) {
-                pipingProcess.destroy();
-                pipingProcess = null;
-            }
+            if (pipingProcess != null) { pipingProcess.destroy(); pipingProcess = null; }
             merging = false;
             stopForeground(true);
             stopSelf();
@@ -94,30 +93,27 @@ public class MergeService extends Service {
     }
 
     /**
-     * THE FIX:
+     * THE FIX (v2):
      *
-     * The old code did: chmod /dev/input/event* → then app opens it directly.
-     * This fails because SELinux on KernelSU/Magisk blocks untrusted app UIDs
-     * from opening /dev/input/event* regardless of DAC (chmod) permissions.
+     * Both /dev/input/event* AND /dev/uinput are blocked by SELinux for app UIDs,
+     * even after chmod. The solution for all three devices is the same:
      *
-     * The fix: open the event devices INSIDE root shell using `cat` piped into
-     * a ParcelFileDescriptor pipe. Root does the open() → SELinux allows it.
-     * We receive events through the read end of the pipe → no SELinux check on us.
+     *   - Input devices (read): root does `cat /dev/input/eventN > pipe_write_end`
+     *     We read events from pipe_read_end — identical binary format.
+     *
+     *   - /dev/uinput (write): root does `cat pipe_read_end > /dev/uinput`
+     *     JNI writes uinput commands to pipe_write_end — forwarded to uinput by root.
+     *
+     * Root does all the open() calls. We never touch /dev/* directly.
      */
     private int openAndMerge() {
         try {
-            // --- Step 1: Scan for Joy-Con device paths using root ---
+            // --- Step 1: Scan for Joy-Con device paths ---
             Process scanProc = Runtime.getRuntime().exec("su");
             DataOutputStream scanOs = new DataOutputStream(scanProc.getOutputStream());
-            BufferedReader scanBr = new BufferedReader(
-                new InputStreamReader(scanProc.getInputStream()));
-            BufferedReader scanEr = new BufferedReader(
-                new InputStreamReader(scanProc.getErrorStream()));
-
-            // Drain stderr in background to prevent blocking
-            new Thread(() -> {
-                try { while (scanEr.readLine() != null) {} } catch (IOException ignored) {}
-            }).start();
+            BufferedReader scanBr = new BufferedReader(new InputStreamReader(scanProc.getInputStream()));
+            BufferedReader scanEr = new BufferedReader(new InputStreamReader(scanProc.getErrorStream()));
+            new Thread(() -> { try { while (scanEr.readLine() != null) {} } catch (IOException e) {} }).start();
 
             scanOs.writeBytes(
                 "for f in /dev/input/event*; do\n" +
@@ -150,54 +146,58 @@ public class MergeService extends Service {
             }
             notifyStatus("Using: L=" + resolvedLeftPath + "  R=" + resolvedRightPath);
 
-            // --- Step 2: Create pipes; have root cat device data into write ends ---
-            // pipe[0] = read end (our JNI reads events from here)
-            // pipe[1] = write end (root's `cat /dev/input/eventN` writes here)
-            ParcelFileDescriptor[] leftPipe  = ParcelFileDescriptor.createPipe();
-            ParcelFileDescriptor[] rightPipe = ParcelFileDescriptor.createPipe();
+            // --- Step 2: Create pipes for all three devices ---
+            //
+            // leftPipe  [0]=read(JNI),  [1]=write(root cat)   — Left Joy-Con events
+            // rightPipe [0]=read(JNI),  [1]=write(root cat)   — Right Joy-Con events
+            // uinputPipe[0]=read(root), [1]=write(JNI)        — uinput commands
+            //
+            ParcelFileDescriptor[] leftPipe   = ParcelFileDescriptor.createPipe();
+            ParcelFileDescriptor[] rightPipe  = ParcelFileDescriptor.createPipe();
+            ParcelFileDescriptor[] uinputPipe = ParcelFileDescriptor.createPipe();
 
             int myPid        = android.os.Process.myPid();
             int leftWriteFd  = leftPipe[1].getFd();
             int rightWriteFd = rightPipe[1].getFd();
+            int uinputReadFd = uinputPipe[0].getFd();
 
-            // Single root shell: chmod uinput + start both cat pipes in background
+            // --- Step 3: Single root shell sets up all three pipes ---
             Process pipeProc = Runtime.getRuntime().exec("su");
             pipingProcess = pipeProc;
             DataOutputStream pipeOs = new DataOutputStream(pipeProc.getOutputStream());
-            BufferedReader pipeBr = new BufferedReader(
-                new InputStreamReader(pipeProc.getInputStream()));
-            BufferedReader pipeEr = new BufferedReader(
-                new InputStreamReader(pipeProc.getErrorStream()));
+            BufferedReader pipeBr = new BufferedReader(new InputStreamReader(pipeProc.getInputStream()));
+            BufferedReader pipeEr = new BufferedReader(new InputStreamReader(pipeProc.getErrorStream()));
+            new Thread(() -> { try { while (pipeEr.readLine() != null) {} } catch (IOException e) {} }).start();
 
-            new Thread(() -> {
-                try { while (pipeEr.readLine() != null) {} } catch (IOException ignored) {}
-            }).start();
-
-            pipeOs.writeBytes("chmod 666 /dev/uinput\n");
-            // Write event stream into our pipe write-ends via /proc/<pid>/fd/<fd>
+            // Root streams Left Joy-Con events into our leftPipe read end
             pipeOs.writeBytes("cat " + resolvedLeftPath
                 + " > /proc/" + myPid + "/fd/" + leftWriteFd + " &\n");
+            // Root streams Right Joy-Con events into our rightPipe read end
             pipeOs.writeBytes("cat " + resolvedRightPath
                 + " > /proc/" + myPid + "/fd/" + rightWriteFd + " &\n");
+            // Root forwards our JNI uinput writes → /dev/uinput
+            pipeOs.writeBytes("cat /proc/" + myPid + "/fd/" + uinputReadFd
+                + " > /dev/uinput &\n");
             pipeOs.writeBytes("echo PIPES_READY\n");
             pipeOs.flush();
 
-            // Wait until pipes are set up
             while ((line = pipeBr.readLine()) != null) {
                 if (line.equals("PIPES_READY")) break;
             }
 
-            // Close write ends in OUR process — only root's cat processes hold them now.
-            // When root closes them (on stopMerge), JNI read() will get EOF cleanly.
+            // Close the ends that root's cat processes now own
             leftPipe[1].close();
             rightPipe[1].close();
+            uinputPipe[0].close();
 
-            // --- Step 3: Pass read-end fds to JNI ---
-            // JNI now reads input_event structs from these pipe fds just like it
-            // would from /dev/input/eventN directly — same binary format.
-            int result = startMergeWithFds(leftPipe[0].getFd(), rightPipe[0].getFd());
-
-            // Don't close leftPipe[0]/rightPipe[0] — JNI owns them now.
+            // --- Step 4: Hand all three fds to JNI ---
+            // JNI reads events from leftPipe[0] and rightPipe[0]
+            // JNI writes uinput commands to uinputPipe[1] (root forwards to /dev/uinput)
+            int result = startMergeWithFds(
+                leftPipe[0].getFd(),
+                rightPipe[0].getFd(),
+                uinputPipe[1].getFd()
+            );
             return result;
 
         } catch (IOException | InterruptedException e) {
@@ -232,12 +232,10 @@ public class MergeService extends Service {
 
     private Notification buildNotification(String text) {
         Intent intent = new Intent(this, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
-            PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
         Intent stopIntent = new Intent(this, MergeService.class);
         stopIntent.setAction(ACTION_STOP);
-        PendingIntent stopPi = PendingIntent.getService(this, 0, stopIntent,
-            PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent stopPi = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Joy-Con Merge")
             .setContentText(text)

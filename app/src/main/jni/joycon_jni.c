@@ -153,10 +153,10 @@ static void *thread_read_right(void *arg) {
     return NULL;
 }
 
-static int setup_uinput(void) {
-    notify_status("Opening /dev/uinput...");
-    uinput_fd=open(UINPUT_PATH,O_WRONLY|O_NONBLOCK);
-    if (uinput_fd<0) { notify_errno("open /dev/uinput"); return -1; }
+static int setup_uinput(int given_fd) {
+    notify_status("Setting up /dev/uinput...");
+    uinput_fd = dup(given_fd);
+    if (uinput_fd<0) { notify_errno("dup uinput fd"); return -1; }
 
     ioctl(uinput_fd,UI_SET_EVBIT,EV_KEY);
     ioctl(uinput_fd,UI_SET_EVBIT,EV_ABS);
@@ -244,7 +244,7 @@ Java_com_joyconmerge_MergeService_startMerge(JNIEnv *env,jobject thiz,
    open() — root did it, we just inherit the fd. */
 JNIEXPORT jint JNICALL
 Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env,jobject thiz,
-    jint jLeftFd, jint jRightFd) {
+    jint jLeftFd, jint jRightFd, jint jUinputFd) {
     if (running) return 0;
 
     /* dup() the fds so Java can close its ParcelFileDescriptor handles
@@ -260,7 +260,7 @@ Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env,jobject thiz,
        would fail with ENOTTY. The root-side `cat` process holds the
        device open exclusively; stopping the root shell stops input. */
 
-    if (setup_uinput()<0) return -1;
+    if (setup_uinput(jUinputFd)<0) return -1;
 
     running=1;
     pthread_create(&thread_left,  NULL,thread_read_left,  NULL);
@@ -272,8 +272,8 @@ Java_com_joyconmerge_MergeService_startMergeWithFds(JNIEnv *env,jobject thiz,
 JNIEXPORT void JNICALL
 Java_com_joyconmerge_MergeService_stopMerge(JNIEnv *env,jobject thiz) {
     running=0;
-    if (left_fd>=0)   { ioctl(left_fd,EVIOCGRAB,0);  close(left_fd);   left_fd=-1; }
-    if (right_fd>=0)  { ioctl(right_fd,EVIOCGRAB,0); close(right_fd);  right_fd=-1; }
+    if (left_fd>=0)   { close(left_fd);   left_fd=-1; }
+    if (right_fd>=0)  { close(right_fd);  right_fd=-1; }
     if (uinput_fd>=0) { ioctl(uinput_fd,UI_DEV_DESTROY); close(uinput_fd); uinput_fd=-1; }
     /* Restore permissions */
     system("su -c 'chmod 600 /dev/uinput; chmod 640 /dev/input/event*'");
