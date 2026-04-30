@@ -87,8 +87,6 @@ static void emit(int type,int code,int value) {
     write(uinput_fd,&ev,sizeof(ev));
 }
 
-static int setup_uinput(void) {
-
 static int clamp(int v,int mn,int mx){ return v<mn?mn:v>mx?mx:v; }
 
 static void handle_dpad(int code,int value) {
