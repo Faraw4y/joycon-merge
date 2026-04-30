@@ -12,5 +12,5 @@ find_library(log-lib log)
 target_link_libraries(
     joyconmerge
     ${log-lib}
-    pthread
+    # pthread is part of Android libc - do NOT link separately
 )
