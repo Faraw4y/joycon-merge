@@ -129,8 +129,8 @@ static void handle_right(struct input_event *ev)
         int c=ev->code, v=ev->value;
         if      (c==305)   { emit(EV_KEY, map_a,    v); emit_event_to_java(EV_KEY, map_a,    v); }
         else if (c==304)   { emit(EV_KEY, map_b,    v); emit_event_to_java(EV_KEY, map_b,    v); }
-        else if (c==307)   { emit(EV_KEY, map_x,    v); emit_event_to_java(EV_KEY, map_x,    v); }
-        else if (c==308)   { emit(EV_KEY, map_y,    v); emit_event_to_java(EV_KEY, map_y,    v); }
+        else if (c==308)   { emit(EV_KEY, map_x,    v); emit_event_to_java(EV_KEY, map_x,    v); }
+        else if (c==307)   { emit(EV_KEY, map_y,    v); emit_event_to_java(EV_KEY, map_y,    v); }
         else if (c==0x137) { emit(EV_KEY, map_r,    v); emit_event_to_java(EV_KEY, map_r,    v); }
         else if (c==0x139) { emit(EV_KEY, map_zr,   v); emit_event_to_java(EV_KEY, map_zr,   v); }
         else if (c==0x13b) { emit(EV_KEY, map_plus, v); emit_event_to_java(EV_KEY, map_plus, v); }
