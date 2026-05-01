@@ -117,13 +117,20 @@ public class MergeService extends Service {
     private void killRootProcess() {
         if (rootProcess != null) {
             try {
-                rootProcess.getOutputStream().write("exit\n".getBytes());
+                // Send exit to shell first
+                rootProcess.getOutputStream().write("killall uinput_setup 2>/dev/null\nexit\n".getBytes());
                 rootProcess.getOutputStream().flush();
-                Thread.sleep(300);
+                Thread.sleep(400);
             } catch (Exception ignored) {}
             rootProcess.destroy();
             rootProcess = null;
             rootStdin = null;
+        } else {
+            // No tracked process - still try to kill any orphan from previous crash
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "killall uinput_setup 2>/dev/null"});
+                p.waitFor();
+            } catch (Exception ignored) {}
         }
     }
 
@@ -133,10 +140,19 @@ public class MergeService extends Service {
             abi = "arm64-v8a";
         String assetName = "uinput_setup_" + abi;
         File outFile = new File(getFilesDir(), "uinput_setup");
+        File tmpFile = new File(getFilesDir(), "uinput_setup.tmp");
+        // Write to temp file first to avoid ETXTBSY if old binary is still running
         try (InputStream in = getAssets().open(assetName);
-             FileOutputStream out = new FileOutputStream(outFile)) {
+             FileOutputStream out = new FileOutputStream(tmpFile)) {
             byte[] buf = new byte[8192]; int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+        tmpFile.setExecutable(true, false);
+        // Atomic rename - safe even if outFile is mapped
+        if (!tmpFile.renameTo(outFile)) {
+            // Rename failed (e.g. cross-device) - try delete + rename
+            outFile.delete();
+            tmpFile.renameTo(outFile);
         }
         outFile.setExecutable(true, false);
         return outFile;

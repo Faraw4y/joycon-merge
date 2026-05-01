@@ -374,8 +374,24 @@ public class MainActivity extends AppCompatActivity {
             BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
             BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
             config.getMapHome(), config.getMapCapture());
-        Toast.makeText(this,"Button mapping saved!",Toast.LENGTH_SHORT).show();
-        applyConfigToService();
+
+        if (bound && service.isMerging()) {
+            // Restart service so the new mapping takes effect immediately
+            Toast.makeText(this, "Mapping saved — restarting…", Toast.LENGTH_SHORT).show();
+            Intent stop = new Intent(this, MergeService.class);
+            stop.setAction(MergeService.ACTION_STOP);
+            startForegroundService(stop);
+            // Give service ~600ms to fully stop, then start again
+            btnToggle.postDelayed(() -> {
+                applyConfigToService();
+                Intent start = new Intent(this, MergeService.class);
+                start.setAction(MergeService.ACTION_START);
+                startForegroundService(start);
+            }, 600);
+        } else {
+            Toast.makeText(this, "Button mapping saved!", Toast.LENGTH_SHORT).show();
+            applyConfigToService();
+        }
     }
 
     private void saveCalib() {
