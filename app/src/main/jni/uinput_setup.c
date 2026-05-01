@@ -31,7 +31,7 @@
 static int stick_fuzz = 256;
 static int stick_flat = 4096;
 static int inv_lx=0, inv_ly=0, inv_rx=0, inv_ry=0;
-static int map_a=0x130, map_b=0x131, map_x=0x133, map_y=0x134;
+static int map_a=0x131, map_b=0x130, map_x=0x134, map_y=0x133;
 static int map_r=0x137, map_zr=0x139, map_plus=0x13b, map_r3=0x13e;
 static int map_l=0x136, map_zl=0x138, map_minus=0x13a, map_l3=0x13d;
 static int map_home=0x13c;
@@ -127,10 +127,10 @@ static void handle_right(struct input_event *ev)
 {
     if (ev->type == EV_KEY) {
         int c=ev->code, v=ev->value;
-        if      (c==304)   { emit(EV_KEY, map_a,    v); emit_event_to_java(EV_KEY, map_a,    v); }
-        else if (c==305)   { emit(EV_KEY, map_b,    v); emit_event_to_java(EV_KEY, map_b,    v); }
-        else if (c==307)   { emit(EV_KEY, map_x,    v); emit_event_to_java(EV_KEY, map_x,    v); }
-        else if (c==308)   { emit(EV_KEY, map_y,    v); emit_event_to_java(EV_KEY, map_y,    v); }
+        if      (c==305)   { emit(EV_KEY, map_a,    v); emit_event_to_java(EV_KEY, map_a,    v); }
+        else if (c==304)   { emit(EV_KEY, map_b,    v); emit_event_to_java(EV_KEY, map_b,    v); }
+        else if (c==308)   { emit(EV_KEY, map_x,    v); emit_event_to_java(EV_KEY, map_x,    v); }
+        else if (c==307)   { emit(EV_KEY, map_y,    v); emit_event_to_java(EV_KEY, map_y,    v); }
         else if (c==0x137) { emit(EV_KEY, map_r,    v); emit_event_to_java(EV_KEY, map_r,    v); }
         else if (c==0x139) { emit(EV_KEY, map_zr,   v); emit_event_to_java(EV_KEY, map_zr,   v); }
         else if (c==0x13b) { emit(EV_KEY, map_plus, v); emit_event_to_java(EV_KEY, map_plus, v); }

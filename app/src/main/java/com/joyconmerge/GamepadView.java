@@ -179,13 +179,13 @@ public class GamepadView extends View {
         float rsX = W - 72*s, rsY = H*0.62f;
         drawStick(c, rsX, rsY, stR, rx, ry, BTN_R3, s);
 
-        // ABXY cluster
-        float abX = W - 52*s, abY = H*0.42f;
+        // ABXY cluster — Nintendo layout: X top, A right, B bottom, Y left
+        float abcX = W - 52*s, abcY = H*0.42f;
         float btnR = 12*s;
-        drawRoundBtn(c, abX,          abY - 18*s, btnR, BTN_X, "X", 0xFF0A84FF, s);
-        drawRoundBtn(c, abX + 18*s,   abY,        btnR, BTN_A, "A", 0xFF30D158, s);
-        drawRoundBtn(c, abX - 18*s,   abY,        btnR, BTN_B, "B", 0xFFFF453A, s);
-        drawRoundBtn(c, abX,          abY + 18*s, btnR, BTN_Y, "Y", 0xFFFFD60A, s);
+        drawRoundBtn(c, abcX,          abcY - 18*s, btnR, BTN_X, "X", 0xFF0A84FF, s);  // top
+        drawRoundBtn(c, abcX + 18*s,   abcY,        btnR, BTN_A, "A", 0xFF30D158, s);  // right
+        drawRoundBtn(c, abcX,          abcY + 18*s, btnR, BTN_B, "B", 0xFFFF453A, s);  // bottom
+        drawRoundBtn(c, abcX - 18*s,   abcY,        btnR, BTN_Y, "Y", 0xFFFFD60A, s);  // left
 
         // Plus (+) and Home (⌂) between center and right
         float midRightX = W - 128*s;

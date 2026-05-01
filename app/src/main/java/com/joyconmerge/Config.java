@@ -24,11 +24,11 @@ public class Config {
     public int getCodeX() { return prefs.getInt("cX", 307); }
     public int getCodeY() { return prefs.getInt("cY", 308); }
 
-    /* Button mappings - output code */
-    public int getMapA() { return prefs.getInt("mA", 0x130); }
-    public int getMapB() { return prefs.getInt("mB", 0x131); }
-    public int getMapX() { return prefs.getInt("mX", 0x133); }
-    public int getMapY() { return prefs.getInt("mY", 0x134); }
+    /* Button mappings - output code (defaults match Nintendo physical layout) */
+    public int getMapA() { return prefs.getInt("mA", 0x131); }  // BTN_EAST
+    public int getMapB() { return prefs.getInt("mB", 0x130); }  // BTN_SOUTH
+    public int getMapX() { return prefs.getInt("mX", 0x134); }  // BTN_WEST  (Nintendo X = west position)
+    public int getMapY() { return prefs.getInt("mY", 0x133); }  // BTN_NORTH (Nintendo Y = north position)
     public int getMapR()  { return prefs.getInt("mR",  0x137); }
     public int getMapZR() { return prefs.getInt("mZR", 0x139); }
     public int getMapPlus(){ return prefs.getInt("mPlus", 0x13b); }

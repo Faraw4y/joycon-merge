@@ -41,22 +41,31 @@ public class MainActivity extends AppCompatActivity {
     private View tabStatus, tabRemap, tabCalib, tabTest;
 
     private static final String[] BTN_NAMES = {
-        "BTN_SOUTH (A)","BTN_EAST (B)","BTN_NORTH (X)","BTN_WEST (Y)",
-        "BTN_TL (L)","BTN_TR (R)","BTN_TL2 (ZL)","BTN_TR2 (ZR)",
-        "BTN_START (+)","BTN_SELECT (-)", "BTN_THUMBL (L3)","BTN_THUMBR (R3)"
+        "BTN_SOUTH (B/Cross)",  // 0x130 = 304
+        "BTN_EAST (A/Circle)",  // 0x131 = 305
+        "BTN_NORTH (Y/Triangle)",// 0x133 = 307
+        "BTN_WEST (X/Square)",  // 0x134 = 308
+        "BTN_TL (L)",           // 0x136 = 310
+        "BTN_TR (R)",           // 0x137 = 311
+        "BTN_TL2 (ZL)",         // 0x138 = 312
+        "BTN_TR2 (ZR)",         // 0x139 = 313
+        "BTN_SELECT (−)",       // 0x13a = 314
+        "BTN_START (+)",        // 0x13b = 315
+        "BTN_THUMBL (L3)",      // 0x13d = 317
+        "BTN_THUMBR (R3)"       // 0x13e = 318
     };
     private static final int[] BTN_CODES = {
-        0x130,0x131,0x133,0x134,
-        0x136,0x137,0x138,0x139,
-        0x13b,0x13a,0x13d,0x13e
+        0x130, 0x131, 0x133, 0x134,
+        0x136, 0x137, 0x138, 0x139,
+        0x13a, 0x13b, 0x13d, 0x13e
     };
 
     private static String keyCodeToName(int code) {
         switch (code) {
-            case 0x130: return GamepadView.BTN_A;
-            case 0x131: return GamepadView.BTN_B;
-            case 0x133: return GamepadView.BTN_X;
-            case 0x134: return GamepadView.BTN_Y;
+            case 0x131: return GamepadView.BTN_A;   // BTN_EAST
+            case 0x130: return GamepadView.BTN_B;   // BTN_SOUTH
+            case 0x134: return GamepadView.BTN_X;   // BTN_WEST
+            case 0x133: return GamepadView.BTN_Y;   // BTN_NORTH
             case 0x136: return GamepadView.BTN_L;
             case 0x137: return GamepadView.BTN_R;
             case 0x138: return GamepadView.BTN_ZL;
