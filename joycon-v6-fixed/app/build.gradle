@@ -1,0 +1,98 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.joyconmerge'
+    compileSdk 34
+
+    ndkVersion "25.2.9519653"
+
+    defaultConfig {
+        applicationId "com.joyconmerge"
+        minSdk 26
+        targetSdk 34
+        versionCode 11
+        versionName "11.0"
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags ""
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/jni/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    buildFeatures {
+        viewBinding true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+/*
+ * Copy uinput_setup binary to assets after NDK build.
+ * Binary is bundled as "uinput_setup_<abi>" in APK assets.
+ * MergeService extracts correct ABI binary at runtime.
+ */
+afterEvaluate {
+    android.applicationVariants.all { variant ->
+        def variantName = variant.name.capitalize()
+
+        ['arm64-v8a', 'armeabi-v7a'].each { abi ->
+            def abiTag = abi.replace('-', '_').replace('/', '_')
+            def srcFile = file("${layout.buildDirectory.get().asFile}/intermediates/cmake/${variant.name}/obj/${abi}/uinput_setup")
+            def dstDir  = file("src/main/assets")
+            def dstFile = file("${dstDir}/uinput_setup_${abi}")
+
+            def copyTask = tasks.register("copyUinputSetup_${abiTag}_${variantName}") {
+                doLast {
+                    if (srcFile.exists()) {
+                        dstDir.mkdirs()
+                        dstFile.bytes = srcFile.bytes
+                        println "Copied uinput_setup (${abi}) -> ${dstFile}"
+                    } else {
+                        throw new GradleException(
+                            "uinput_setup binary not found: ${srcFile}\n" +
+                            "Make sure NDK build ran first.")
+                    }
+                }
+            }
+
+            def externalBuildTask = tasks.findByName("externalNativeBuild${variantName}")
+            if (externalBuildTask) {
+                copyTask.configure { dependsOn externalBuildTask }
+            }
+
+            tasks.named("merge${variantName}Assets").configure {
+                dependsOn copyTask
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+}

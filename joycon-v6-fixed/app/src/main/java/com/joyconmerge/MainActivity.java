@@ -19,10 +19,6 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import com.google.android.material.tabs.TabLayout;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -37,11 +33,6 @@ public class MainActivity extends AppCompatActivity {
     private Button btnToggle;
     private Spinner spA, spB, spX, spY, spR, spZR, spPlus, spR3;
     private Spinner spL, spZL, spMinus, spL3;
-    // Manual override
-    private Spinner spLeftPath, spRightPath;
-    private CheckBox cbUseManual;
-    private List<String> eventPaths = new ArrayList<>();
-
     private SeekBar sbFlat, sbFuzz;
     private TextView tvFlat, tvFuzz;
     private CheckBox cbInvLX, cbInvLY, cbInvRX, cbInvRY;
@@ -50,18 +41,18 @@ public class MainActivity extends AppCompatActivity {
     private View tabStatus, tabRemap, tabCalib, tabTest;
 
     private static final String[] BTN_NAMES = {
-        "BTN_SOUTH (B/Cross)",   // 0x130 = 304
-        "BTN_EAST (A/Circle)",   // 0x131 = 305
+        "BTN_SOUTH (B/Cross)",  // 0x130 = 304
+        "BTN_EAST (A/Circle)",  // 0x131 = 305
         "BTN_NORTH (Y/Triangle)",// 0x133 = 307
-        "BTN_WEST (X/Square)",   // 0x134 = 308
-        "BTN_TL (L)",            // 0x136 = 310
-        "BTN_TR (R)",            // 0x137 = 311
-        "BTN_TL2 (ZL)",          // 0x138 = 312
-        "BTN_TR2 (ZR)",          // 0x139 = 313
-        "BTN_SELECT (−)",        // 0x13a = 314
-        "BTN_START (+)",         // 0x13b = 315
-        "BTN_THUMBL (L3)",       // 0x13d = 317
-        "BTN_THUMBR (R3)"        // 0x13e = 318
+        "BTN_WEST (X/Square)",  // 0x134 = 308
+        "BTN_TL (L)",           // 0x136 = 310
+        "BTN_TR (R)",           // 0x137 = 311
+        "BTN_TL2 (ZL)",         // 0x138 = 312
+        "BTN_TR2 (ZR)",         // 0x139 = 313
+        "BTN_SELECT (−)",       // 0x13a = 314
+        "BTN_START (+)",        // 0x13b = 315
+        "BTN_THUMBL (L3)",      // 0x13d = 317
+        "BTN_THUMBR (R3)"       // 0x13e = 318
     };
     private static final int[] BTN_CODES = {
         0x130, 0x131, 0x133, 0x134,
@@ -71,10 +62,10 @@ public class MainActivity extends AppCompatActivity {
 
     private static String keyCodeToName(int code) {
         switch (code) {
-            case 0x131: return GamepadView.BTN_A;
-            case 0x130: return GamepadView.BTN_B;
-            case 0x133: return GamepadView.BTN_X;
-            case 0x134: return GamepadView.BTN_Y;
+            case 0x131: return GamepadView.BTN_A;   // BTN_EAST
+            case 0x130: return GamepadView.BTN_B;   // BTN_SOUTH
+            case 0x133: return GamepadView.BTN_X;   // BTN_NORTH
+            case 0x134: return GamepadView.BTN_Y;   // BTN_WEST
             case 0x136: return GamepadView.BTN_L;
             case 0x137: return GamepadView.BTN_R;
             case 0x138: return GamepadView.BTN_ZL;
@@ -158,12 +149,6 @@ public class MainActivity extends AppCompatActivity {
         gamepadView = findViewById(R.id.gamepad_view);
         tvLastBtn   = findViewById(R.id.tv_last_btn);
 
-        // Manual override
-        spLeftPath  = findViewById(R.id.sp_left_path);
-        spRightPath = findViewById(R.id.sp_right_path);
-        cbUseManual = findViewById(R.id.cb_use_manual);
-        findViewById(R.id.btn_scan_paths).setOnClickListener(v -> scanEventPaths());
-
         btnToggle.setOnClickListener(v -> toggleMerge());
         findViewById(R.id.btn_save_remap).setOnClickListener(v -> saveRemap());
         findViewById(R.id.btn_save_calib).setOnClickListener(v -> saveCalib());
@@ -235,188 +220,6 @@ public class MainActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar sb){}
         });
     }
-
-    // ── Manual Override ─────────────────────────────────────────────────────
-
-    /** Scan semua /dev/input/event* via root dan populate spinners */
-    private void scanEventPaths() {
-        Toast.makeText(this, "Scanning...", Toast.LENGTH_SHORT).show();
-        new Thread(() -> {
-            List<String> found = new ArrayList<>();
-            try {
-                Process proc = Runtime.getRuntime().exec("su");
-                DataOutputStream os = new DataOutputStream(proc.getOutputStream());
-                BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
-                new Thread(() -> {
-                    try (BufferedReader er = new BufferedReader(
-                            new InputStreamReader(proc.getErrorStream()))) {
-                        while (er.readLine() != null) {}
-                    } catch (IOException ignored) {}
-                }).start();
-                os.writeBytes(
-                    "for f in /dev/input/event*; do\n" +
-                    "  name=$(cat /sys/class/input/$(basename $f)/device/name 2>/dev/null)\n" +
-                    "  echo \"$f|$name\"\n" +
-                    "done\n" +
-                    "echo SCAN_DONE\n" +
-                    "exit\n");
-                os.flush();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (line.equals("SCAN_DONE")) break;
-                    found.add(line);
-                }
-                proc.waitFor();
-            } catch (Exception e) {
-                found.add("ERROR|" + e.getMessage());
-            }
-            runOnUiThread(() -> updatePathSpinners(found));
-        }).start();
-    }
-
-    private void updatePathSpinners(List<String> raw) {
-        eventPaths.clear();
-        List<String> labels = new ArrayList<>();
-        for (String entry : raw) {
-            String[] parts = entry.split("\\|", 2);
-            String path = parts[0].trim();
-            String name = parts.length > 1 ? parts[1].trim() : "";
-            eventPaths.add(path);
-            labels.add(path + (name.isEmpty() ? "" : "  [" + name + "]"));
-        }
-        if (eventPaths.isEmpty()) {
-            Toast.makeText(this, "Tidak ada event device ditemukan", Toast.LENGTH_LONG).show();
-            return;
-        }
-        ArrayAdapter<String> adL = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, labels);
-        adL.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spLeftPath.setAdapter(adL);
-        ArrayAdapter<String> adR = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>(labels));
-        adR.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spRightPath.setAdapter(adR);
-
-        // Auto-select: entry Joy-Con pertama → L, terakhir → R
-        for (int i = 0; i < labels.size(); i++) {
-            if (labels.get(i).toLowerCase().contains("joy")) { spLeftPath.setSelection(i); break; }
-        }
-        for (int i = labels.size() - 1; i >= 0; i--) {
-            if (labels.get(i).toLowerCase().contains("joy")) { spRightPath.setSelection(i); break; }
-        }
-        Toast.makeText(this,
-            "✓ " + eventPaths.size() + " device. Pilih mana yang L dan R, lalu Start.",
-            Toast.LENGTH_LONG).show();
-    }
-
-    // ── Merge control ────────────────────────────────────────────────────────
-
-    private void toggleMerge() {
-        if (bound && service.isMerging()) {
-            Intent intent = new Intent(this, MergeService.class);
-            intent.setAction(MergeService.ACTION_STOP);
-            startForegroundService(intent);
-        } else {
-            checkPermissionsAndStart();
-        }
-    }
-
-    private void checkPermissionsAndStart() {
-        List<String> needed = new ArrayList<>();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED)
-                needed.add(Manifest.permission.POST_NOTIFICATIONS);
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
-                    != PackageManager.PERMISSION_GRANTED)
-                needed.add(Manifest.permission.BLUETOOTH_SCAN);
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                    != PackageManager.PERMISSION_GRANTED)
-                needed.add(Manifest.permission.BLUETOOTH_CONNECT);
-        }
-        if (needed.isEmpty()) doStartMerge();
-        else permissionLauncher.launch(needed.toArray(new String[0]));
-    }
-
-    private void doStartMerge() {
-        applyConfigToService();
-        if (cbUseManual != null && cbUseManual.isChecked()) {
-            if (eventPaths.isEmpty()) {
-                Toast.makeText(this, "Scan dulu path-nya pakai tombol 🔍", Toast.LENGTH_LONG).show();
-                return;
-            }
-            String lp = eventPaths.get(spLeftPath.getSelectedItemPosition());
-            String rp = eventPaths.get(spRightPath.getSelectedItemPosition());
-            if (lp.equals(rp)) {
-                Toast.makeText(this, "Left dan Right path tidak boleh sama!", Toast.LENGTH_LONG).show();
-                return;
-            }
-            Intent intent = new Intent(this, MergeService.class);
-            intent.setAction(MergeService.ACTION_START_MANUAL);
-            intent.putExtra(MergeService.EXTRA_LEFT_PATH,  lp);
-            intent.putExtra(MergeService.EXTRA_RIGHT_PATH, rp);
-            startForegroundService(intent);
-        } else {
-            Intent intent = new Intent(this, MergeService.class);
-            intent.setAction(MergeService.ACTION_START);
-            startForegroundService(intent);
-        }
-    }
-
-    private void applyConfigToService() {
-        if (!bound) return;
-        service.setConfig(
-            config.getFuzz(), config.getFlat(),
-            config.getInvLX()?1:0, config.getInvLY()?1:0,
-            config.getInvRX()?1:0, config.getInvRY()?1:0,
-            config.getMapA(),  config.getMapB(),
-            config.getMapX(),  config.getMapY(),
-            config.getMapR(),  config.getMapZR(),
-            config.getMapPlus(),config.getMapR3(),
-            config.getMapL(),  config.getMapZL(),
-            config.getMapMinus(),config.getMapL3(),
-            config.getMapHome(), config.getMapCapture()
-        );
-    }
-
-    private void saveRemap() {
-        config.save(config.getFuzz(),config.getFlat(),
-            config.getInvLX(),config.getInvLY(),config.getInvRX(),config.getInvRY(),
-            BTN_CODES[spA.getSelectedItemPosition()],BTN_CODES[spB.getSelectedItemPosition()],
-            BTN_CODES[spX.getSelectedItemPosition()],BTN_CODES[spY.getSelectedItemPosition()],
-            BTN_CODES[spR.getSelectedItemPosition()],BTN_CODES[spZR.getSelectedItemPosition()],
-            BTN_CODES[spPlus.getSelectedItemPosition()],BTN_CODES[spR3.getSelectedItemPosition()],
-            BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
-            BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
-            config.getMapHome(), config.getMapCapture());
-
-        if (bound && service.isMerging()) {
-            Toast.makeText(this, "Mapping saved — restarting…", Toast.LENGTH_SHORT).show();
-            Intent stop = new Intent(this, MergeService.class);
-            stop.setAction(MergeService.ACTION_STOP);
-            startForegroundService(stop);
-            btnToggle.postDelayed(() -> {
-                applyConfigToService();
-                doStartMerge();
-            }, 600);
-        } else {
-            Toast.makeText(this, "Button mapping saved!", Toast.LENGTH_SHORT).show();
-            applyConfigToService();
-        }
-    }
-
-    private void saveCalib() {
-        config.save(sbFuzz.getProgress(),sbFlat.getProgress(),
-            cbInvLX.isChecked(),cbInvLY.isChecked(),cbInvRX.isChecked(),cbInvRY.isChecked(),
-            config.getMapA(),config.getMapB(),config.getMapX(),config.getMapY(),
-            config.getMapR(),config.getMapZR(),config.getMapPlus(),config.getMapR3(),
-            config.getMapL(),config.getMapZL(),config.getMapMinus(),config.getMapL3(),
-            config.getMapHome(), config.getMapCapture());
-        Toast.makeText(this,"Calibration saved!",Toast.LENGTH_SHORT).show();
-        applyConfigToService();
-    }
-
-    // ── Event handling ───────────────────────────────────────────────────────
 
     private void handleEvent(String event) {
         if (event == null) return;
@@ -509,7 +312,98 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── UI helpers ───────────────────────────────────────────────────────────
+    private void toggleMerge() {
+        if (bound && service.isMerging()) {
+            Intent intent = new Intent(this, MergeService.class);
+            intent.setAction(MergeService.ACTION_STOP);
+            startForegroundService(intent);
+        } else {
+            checkPermissionsAndStart();
+        }
+    }
+
+    private void checkPermissionsAndStart() {
+        List<String> needed = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED)
+                needed.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+                    != PackageManager.PERMISSION_GRANTED)
+                needed.add(Manifest.permission.BLUETOOTH_SCAN);
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED)
+                needed.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (needed.isEmpty()) doStartMerge();
+        else permissionLauncher.launch(needed.toArray(new String[0]));
+    }
+
+    private void doStartMerge() {
+        applyConfigToService();
+        Intent intent = new Intent(this, MergeService.class);
+        intent.setAction(MergeService.ACTION_START);
+        startForegroundService(intent);
+    }
+
+    private void applyConfigToService() {
+        if (!bound) return;
+        service.setConfig(
+            config.getFuzz(), config.getFlat(),
+            config.getInvLX()?1:0, config.getInvLY()?1:0,
+            config.getInvRX()?1:0, config.getInvRY()?1:0,
+            config.getMapA(),  config.getMapB(),
+            config.getMapX(),  config.getMapY(),
+            config.getMapR(),  config.getMapZR(),
+            config.getMapPlus(),config.getMapR3(),
+            config.getMapL(),  config.getMapZL(),
+            config.getMapMinus(),config.getMapL3(),
+            config.getMapHome(), config.getMapCapture()
+        );
+    }
+
+    private void saveRemap() {
+        config.save(config.getFuzz(),config.getFlat(),
+            config.getInvLX(),config.getInvLY(),config.getInvRX(),config.getInvRY(),
+            BTN_CODES[spA.getSelectedItemPosition()],BTN_CODES[spB.getSelectedItemPosition()],
+            BTN_CODES[spX.getSelectedItemPosition()],BTN_CODES[spY.getSelectedItemPosition()],
+            BTN_CODES[spR.getSelectedItemPosition()],BTN_CODES[spZR.getSelectedItemPosition()],
+            BTN_CODES[spPlus.getSelectedItemPosition()],BTN_CODES[spR3.getSelectedItemPosition()],
+            BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
+            BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
+            config.getMapHome(), config.getMapCapture());
+
+        if (bound && service.isMerging()) {
+            // Restart service so the new mapping takes effect immediately
+            Toast.makeText(this, "Mapping saved — restarting…", Toast.LENGTH_SHORT).show();
+            Intent stop = new Intent(this, MergeService.class);
+            stop.setAction(MergeService.ACTION_STOP);
+            startForegroundService(stop);
+            // Give service ~600ms to fully stop, then start again
+            btnToggle.postDelayed(() -> {
+                applyConfigToService();
+                Intent start = new Intent(this, MergeService.class);
+                start.setAction(MergeService.ACTION_START);
+                startForegroundService(start);
+            }, 600);
+        } else {
+            Toast.makeText(this, "Button mapping saved!", Toast.LENGTH_SHORT).show();
+            applyConfigToService();
+        }
+    }
+
+    private void saveCalib() {
+        config.save(sbFuzz.getProgress(),sbFlat.getProgress(),
+            cbInvLX.isChecked(),cbInvLY.isChecked(),cbInvRX.isChecked(),cbInvRY.isChecked(),
+            config.getMapA(),config.getMapB(),config.getMapX(),config.getMapY(),
+            config.getMapR(),config.getMapZR(),config.getMapPlus(),config.getMapR3(),
+            config.getMapL(),config.getMapZL(),config.getMapMinus(),config.getMapL3(),
+            config.getMapHome(), config.getMapCapture());
+        Toast.makeText(this,"Calibration saved!",Toast.LENGTH_SHORT).show();
+        applyConfigToService();
+    }
 
     private void handleStatus(String msg) {
         tvStatus.setText(msg);

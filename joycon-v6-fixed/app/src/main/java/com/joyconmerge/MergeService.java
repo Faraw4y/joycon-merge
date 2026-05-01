@@ -18,16 +18,25 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.List;
 
+/**
+ * MergeService v6 — root binary handles everything directly.
+ *
+ * Architecture:
+ *   1. Extract uinput_setup binary from assets
+ *   2. Scan Joy-Con paths via root
+ *   3. Launch binary as root with all config as args
+ *   4. Binary opens /dev/uinput + Joy-Con devices, grabs them exclusively,
+ *      runs two threads (left/right reader), writes merged events to uinput
+ *   5. Java reads stdout for status ("UINPUT_READY", "STATUS:...", "ERROR:...")
+ *   6. To stop: write "STOP\n" to binary's stdin
+ *
+ * No JNI, no event pipes, no race conditions.
+ */
 public class MergeService extends Service {
 
-    public static final String ACTION_START        = "com.joyconmerge.START";
-    public static final String ACTION_START_MANUAL = "com.joyconmerge.START_MANUAL";
-    public static final String ACTION_STOP         = "com.joyconmerge.STOP";
-    public static final String EXTRA_LEFT_PATH     = "left_path";
-    public static final String EXTRA_RIGHT_PATH    = "right_path";
+    public static final String ACTION_START = "com.joyconmerge.START";
+    public static final String ACTION_STOP  = "com.joyconmerge.STOP";
     private static final String CHANNEL_ID  = "joycon_merge";
     private static final int    NOTIF_ID    = 1;
 
@@ -35,8 +44,6 @@ public class MergeService extends Service {
         void onStatus(String msg);
         void onEvent(String event);
         void onDevices(String left, String right);
-        // Called when scan completes — passes all found event paths
-        void onScanResult(List<String> allPaths, String autoLeft, String autoRight);
     }
 
     public class LocalBinder extends android.os.Binder {
@@ -49,11 +56,7 @@ public class MergeService extends Service {
     private Process rootProcess = null;
     private DataOutputStream rootStdin = null;
 
-    // Manual override paths (empty = use auto-scan)
-    private String manualLeftPath  = "";
-    private String manualRightPath = "";
-
-    // Config
+    // Config — set by MainActivity before starting
     private int fuzz=256, flat=4096;
     private int invLX=0, invLY=0, invRX=0, invRY=0;
     private int mapA=0x130,mapB=0x131,mapX=0x133,mapY=0x134;
@@ -76,12 +79,6 @@ public class MergeService extends Service {
         this.mapHome=mapHome; this.mapCapture=mapCapture;
     }
 
-    /** Set manual device paths. Pass empty strings to use auto-scan. */
-    public void setManualPaths(String leftPath, String rightPath) {
-        this.manualLeftPath  = leftPath  == null ? "" : leftPath.trim();
-        this.manualRightPath = rightPath == null ? "" : rightPath.trim();
-    }
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -95,11 +92,6 @@ public class MergeService extends Service {
         if (ACTION_START.equals(action)) {
             startForeground(NOTIF_ID, buildNotification("Running — Joy-Cons merged"));
             new Thread(this::openAndMerge).start();
-        } else if (ACTION_START_MANUAL.equals(action)) {
-            String lp = intent.getStringExtra(EXTRA_LEFT_PATH);
-            String rp = intent.getStringExtra(EXTRA_RIGHT_PATH);
-            startForeground(NOTIF_ID, buildNotification("Running — Joy-Cons merged (manual)"));
-            new Thread(() -> openAndMergeWithPaths(lp, rp)).start();
         } else if (ACTION_STOP.equals(action)) {
             doStop();
         }
@@ -107,6 +99,7 @@ public class MergeService extends Service {
     }
 
     private void doStop() {
+        // Send STOP command to binary's stdin
         if (rootStdin != null) {
             try {
                 rootStdin.writeBytes("STOP\n");
@@ -124,6 +117,7 @@ public class MergeService extends Service {
     private void killRootProcess() {
         if (rootProcess != null) {
             try {
+                // Send exit to shell first
                 rootProcess.getOutputStream().write("killall uinput_setup 2>/dev/null\nexit\n".getBytes());
                 rootProcess.getOutputStream().flush();
                 Thread.sleep(400);
@@ -132,6 +126,7 @@ public class MergeService extends Service {
             rootProcess = null;
             rootStdin = null;
         } else {
+            // No tracked process - still try to kill any orphan from previous crash
             try {
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "killall uinput_setup 2>/dev/null"});
                 p.waitFor();
@@ -146,13 +141,16 @@ public class MergeService extends Service {
         String assetName = "uinput_setup_" + abi;
         File outFile = new File(getFilesDir(), "uinput_setup");
         File tmpFile = new File(getFilesDir(), "uinput_setup.tmp");
+        // Write to temp file first to avoid ETXTBSY if old binary is still running
         try (InputStream in = getAssets().open(assetName);
              FileOutputStream out = new FileOutputStream(tmpFile)) {
             byte[] buf = new byte[8192]; int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
         }
         tmpFile.setExecutable(true, false);
+        // Atomic rename - safe even if outFile is mapped
         if (!tmpFile.renameTo(outFile)) {
+            // Rename failed (e.g. cross-device) - try delete + rename
             outFile.delete();
             tmpFile.renameTo(outFile);
         }
@@ -160,33 +158,7 @@ public class MergeService extends Service {
         return outFile;
     }
 
-    /**
-     * Scan all Joy-Con event paths via root.
-     * Returns: [autoLeft, autoRight, path0, path1, path2, ...]
-     * - autoLeft/autoRight = auto-detected by name (may be empty)
-     * - remaining = ALL Joy-Con event paths found (Left or Right by name)
-     */
-    public void scanJoyConPathsAsync() {
-        new Thread(() -> {
-            try {
-                ScanResult result = doScan();
-                if (callback != null) {
-                    callback.onScanResult(result.allPaths, result.autoLeft, result.autoRight);
-                }
-            } catch (Exception e) {
-                if (callback != null) {
-                    callback.onStatus("ERROR: scan failed: " + e.getMessage());
-                }
-            }
-        }).start();
-    }
-
-    private static class ScanResult {
-        String autoLeft = "", autoRight = "";
-        List<String> allPaths = new ArrayList<>();
-    }
-
-    private ScanResult doScan() throws IOException, InterruptedException {
+    private String[] scanJoyConPaths() throws IOException, InterruptedException {
         Process proc = Runtime.getRuntime().exec("su");
         DataOutputStream os = new DataOutputStream(proc.getOutputStream());
         BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
@@ -203,49 +175,20 @@ public class MergeService extends Service {
             "  case \"$name\" in\n" +
             "    *'Left Joy-Con'*)  echo \"LEFT:$f\" ;;\n" +
             "    *'Right Joy-Con'*) echo \"RIGHT:$f\" ;;\n" +
-            "    *'Joy-Con'*)       echo \"JOYCON:$f\" ;;\n" +
             "  esac\n" +
             "done\n" +
             "echo SCAN_DONE\n" +
             "exit\n");
         os.flush();
 
-        ScanResult result = new ScanResult();
-        String line;
+        String left="", right="", line;
         while ((line = br.readLine()) != null) {
-            if (line.startsWith("LEFT:")) {
-                String path = line.substring(5).trim();
-                result.autoLeft = path;
-                if (!result.allPaths.contains(path)) result.allPaths.add(path);
-            } else if (line.startsWith("RIGHT:")) {
-                String path = line.substring(6).trim();
-                if (result.autoRight.isEmpty()) result.autoRight = path;
-                if (!result.allPaths.contains(path)) result.allPaths.add(path);
-            } else if (line.startsWith("JOYCON:")) {
-                String path = line.substring(7).trim();
-                if (!result.allPaths.contains(path)) result.allPaths.add(path);
-            } else if (line.equals("SCAN_DONE")) {
-                break;
-            }
+            if (line.startsWith("LEFT:"))  left  = line.substring(5).trim();
+            if (line.startsWith("RIGHT:")) right = line.substring(6).trim();
+            if (line.equals("SCAN_DONE")) break;
         }
         proc.waitFor();
-        return result;
-    }
-
-    /** Skip auto-scan — use manually chosen paths directly */
-    private void openAndMergeWithPaths(String leftPath, String rightPath) {
-        File binary;
-        try {
-            binary = extractBinary();
-            notifyStatus("Binary extracted");
-        } catch (IOException e) {
-            notifyStatus("ERROR: extract binary: " + e.getMessage()); return;
-        }
-        if (leftPath == null || leftPath.isEmpty())  { notifyStatus("ERROR: Left path not set");  return; }
-        if (rightPath == null || rightPath.isEmpty()) { notifyStatus("ERROR: Right path not set"); return; }
-        notifyStatus("Manual: L=" + leftPath + " R=" + rightPath);
-        if (callback != null) callback.onDevices(leftPath, rightPath);
-        launchBinary(binary, leftPath, rightPath);
+        return new String[]{left, right};
     }
 
     private void openAndMerge() {
@@ -258,37 +201,19 @@ public class MergeService extends Service {
         }
 
         String leftPath, rightPath;
-
-        // Use manual override if set
-        if (!manualLeftPath.isEmpty() && !manualRightPath.isEmpty()) {
-            leftPath  = manualLeftPath;
-            rightPath = manualRightPath;
-            notifyStatus("Using manual paths: L=" + leftPath + " R=" + rightPath);
-        } else {
-            // Auto-scan
-            try {
-                ScanResult result = doScan();
-                leftPath  = result.autoLeft;
-                rightPath = result.autoRight;
-                // Notify UI with full scan result so it can populate dropdowns
-                if (callback != null) {
-                    final ScanResult fr = result;
-                    callback.onScanResult(fr.allPaths, fr.autoLeft, fr.autoRight);
-                }
-            } catch (Exception e) {
-                notifyStatus("ERROR: scan failed: " + e.getMessage()); return;
-            }
+        try {
+            String[] paths = scanJoyConPaths();
+            leftPath = paths[0]; rightPath = paths[1];
+        } catch (Exception e) {
+            notifyStatus("ERROR: scan failed: " + e.getMessage()); return;
         }
 
-        if (leftPath.isEmpty())  { notifyStatus("ERROR: Left Joy-Con not found — use Manual Override"); return; }
-        if (rightPath.isEmpty()) { notifyStatus("ERROR: Right Joy-Con not found");                      return; }
-
+        if (leftPath.isEmpty())  { notifyStatus("ERROR: Left Joy-Con not found");  return; }
+        if (rightPath.isEmpty()) { notifyStatus("ERROR: Right Joy-Con not found"); return; }
         notifyStatus("Found: L=" + leftPath + " R=" + rightPath);
         if (callback != null) callback.onDevices(leftPath, rightPath);
-        launchBinary(binary, leftPath, rightPath);
-    }
 
-    private void launchBinary(File binary, String leftPath, String rightPath) {
+        // Build command: binary path + all config as args
         String cmd = binary.getAbsolutePath()
             + " " + leftPath
             + " " + rightPath
@@ -321,6 +246,7 @@ public class MergeService extends Service {
             BufferedReader br = new BufferedReader(
                 new InputStreamReader(proc.getInputStream()));
 
+            // Drain stderr
             new Thread(() -> {
                 try (BufferedReader er = new BufferedReader(
                         new InputStreamReader(proc.getErrorStream()))) {
@@ -330,9 +256,11 @@ public class MergeService extends Service {
                 } catch (IOException ignored) {}
             }).start();
 
+            // Send command to root shell
             rootStdin.writeBytes(cmd);
             rootStdin.flush();
 
+            // Read status lines
             boolean ready = false;
             String line;
             while ((line = br.readLine()) != null) {
