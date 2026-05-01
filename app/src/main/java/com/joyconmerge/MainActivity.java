@@ -64,8 +64,8 @@ public class MainActivity extends AppCompatActivity {
         switch (code) {
             case 0x131: return GamepadView.BTN_A;   // BTN_EAST
             case 0x130: return GamepadView.BTN_B;   // BTN_SOUTH
-            case 0x134: return GamepadView.BTN_X;   // BTN_WEST
-            case 0x133: return GamepadView.BTN_Y;   // BTN_NORTH
+            case 0x133: return GamepadView.BTN_X;   // BTN_NORTH
+            case 0x134: return GamepadView.BTN_Y;   // BTN_WEST
             case 0x136: return GamepadView.BTN_L;
             case 0x137: return GamepadView.BTN_R;
             case 0x138: return GamepadView.BTN_ZL;
