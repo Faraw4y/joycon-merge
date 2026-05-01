@@ -108,6 +108,14 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> tvDevices.setText(
                         "L Joy-Con: " + left + "\nR Joy-Con: " + right));
                 }
+                @Override public void onScanResult(java.util.List<String> allPaths, String autoLeft, String autoRight) {
+                    // Auto-scan result — only used in auto mode; manual mode uses its own scan
+                    runOnUiThread(() -> {
+                        if (cbUseManual == null || !cbUseManual.isChecked()) {
+                            // Nothing extra to do — devices shown via onDevices
+                        }
+                    });
+                }
             });
             updateToggleButton();
         }
