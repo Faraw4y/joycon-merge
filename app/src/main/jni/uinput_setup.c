@@ -35,6 +35,7 @@ static int map_a=0x130, map_b=0x131, map_x=0x133, map_y=0x134;
 static int map_r=0x137, map_zr=0x139, map_plus=0x13b, map_r3=0x13e;
 static int map_l=0x136, map_zl=0x138, map_minus=0x13a, map_l3=0x13d;
 static int map_home=0x13c;
+static int map_capture=0xa7;  /* KEY_RECORD */
 
 static int uinput_fd = -1;
 static int left_fd   = -1;
@@ -46,6 +47,15 @@ static pthread_mutex_t emit_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t dpad_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int dp_up=0, dp_down=0, dp_left=0, dp_right=0;
+
+static void emit_event_to_java(int type, int code, int value)
+{
+    if (type == EV_KEY)
+        fprintf(stdout, "EVENT:KEY %d %d\n", code, value);
+    else if (type == EV_ABS && code <= 4)
+        fprintf(stdout, "EVENT:ABS %d %d\n", code, value);
+    fflush(stdout);
+}
 
 static void emit(int type, int code, int value)
 {
@@ -78,24 +88,35 @@ static void handle_dpad(int code, int value)
     emit(EV_ABS, ABS_HAT0X, hx);
     emit(EV_ABS, ABS_HAT0Y, hy);
     emit(EV_SYN, SYN_REPORT, 0);
+    /* Forward dpad state to Java UI */
+    fprintf(stdout,"EVENT:DPAD up %d\n",    dp_up);
+    fprintf(stdout,"EVENT:DPAD down %d\n",  dp_down);
+    fprintf(stdout,"EVENT:DPAD left %d\n",  dp_left);
+    fprintf(stdout,"EVENT:DPAD right %d\n", dp_right);
+    fflush(stdout);
 }
 
 static void handle_left(struct input_event *ev)
 {
     if (ev->type == EV_KEY) {
         int c=ev->code, v=ev->value;
-        if      (c==0x136) emit(EV_KEY, map_l,    v);
-        else if (c==0x138) emit(EV_KEY, map_zl,   v);
-        else if (c==0x13a) emit(EV_KEY, map_minus, v);
-        else if (c==0x13d) emit(EV_KEY, map_l3,   v);
+        if      (c==0x136) { emit(EV_KEY, map_l,       v); emit_event_to_java(EV_KEY, map_l,       v); }
+        else if (c==0x138) { emit(EV_KEY, map_zl,      v); emit_event_to_java(EV_KEY, map_zl,      v); }
+        else if (c==0x13a) { emit(EV_KEY, map_minus,   v); emit_event_to_java(EV_KEY, map_minus,   v); }
+        else if (c==0x13d) { emit(EV_KEY, map_l3,      v); emit_event_to_java(EV_KEY, map_l3,      v); }
+        else if (c==0x135) { emit(EV_KEY, map_capture, v); emit_event_to_java(EV_KEY, map_capture, v); }
         else if (c==544||c==545||c==546||c==547) handle_dpad(c,v);
     } else if (ev->type == EV_ABS) {
         if (ev->code == 0) {
             int v = ev->value; if (inv_lx) v=-v;
-            emit(EV_ABS, ABS_X, apply_deadzone(v));
+            int dv = apply_deadzone(v);
+            emit(EV_ABS, ABS_X, dv);
+            emit_event_to_java(EV_ABS, 0, dv);
         } else if (ev->code == 1) {
             int v = ev->value; if (inv_ly) v=-v;
-            emit(EV_ABS, ABS_Y, apply_deadzone(v));
+            int dv = apply_deadzone(v);
+            emit(EV_ABS, ABS_Y, dv);
+            emit_event_to_java(EV_ABS, 1, dv);
         }
     } else if (ev->type == EV_SYN) {
         emit(EV_SYN, SYN_REPORT, 0);
@@ -106,22 +127,26 @@ static void handle_right(struct input_event *ev)
 {
     if (ev->type == EV_KEY) {
         int c=ev->code, v=ev->value;
-        if      (c==304)   emit(EV_KEY, map_a,    v);
-        else if (c==305)   emit(EV_KEY, map_b,    v);
-        else if (c==307)   emit(EV_KEY, map_x,    v);
-        else if (c==308)   emit(EV_KEY, map_y,    v);
-        else if (c==0x137) emit(EV_KEY, map_r,    v);
-        else if (c==0x139) emit(EV_KEY, map_zr,   v);
-        else if (c==0x13b) emit(EV_KEY, map_plus, v);
-        else if (c==0x13e) emit(EV_KEY, map_r3,   v);
-        else if (c==0x13c) emit(EV_KEY, map_home, v);
+        if      (c==304)   { emit(EV_KEY, map_a,    v); emit_event_to_java(EV_KEY, map_a,    v); }
+        else if (c==305)   { emit(EV_KEY, map_b,    v); emit_event_to_java(EV_KEY, map_b,    v); }
+        else if (c==307)   { emit(EV_KEY, map_x,    v); emit_event_to_java(EV_KEY, map_x,    v); }
+        else if (c==308)   { emit(EV_KEY, map_y,    v); emit_event_to_java(EV_KEY, map_y,    v); }
+        else if (c==0x137) { emit(EV_KEY, map_r,    v); emit_event_to_java(EV_KEY, map_r,    v); }
+        else if (c==0x139) { emit(EV_KEY, map_zr,   v); emit_event_to_java(EV_KEY, map_zr,   v); }
+        else if (c==0x13b) { emit(EV_KEY, map_plus, v); emit_event_to_java(EV_KEY, map_plus, v); }
+        else if (c==0x13e) { emit(EV_KEY, map_r3,   v); emit_event_to_java(EV_KEY, map_r3,   v); }
+        else if (c==0x13c) { emit(EV_KEY, map_home, v); emit_event_to_java(EV_KEY, map_home, v); }
     } else if (ev->type == EV_ABS) {
         if (ev->code == 3) {
             int v = ev->value; if (inv_rx) v=-v;
-            emit(EV_ABS, ABS_RX, apply_deadzone(v));
+            int dv = apply_deadzone(v);
+            emit(EV_ABS, ABS_RX, dv);
+            emit_event_to_java(EV_ABS, 3, dv);
         } else if (ev->code == 4) {
             int v = ev->value; if (inv_ry) v=-v;
-            emit(EV_ABS, ABS_RY, apply_deadzone(v));
+            int dv = apply_deadzone(v);
+            emit(EV_ABS, ABS_RY, dv);
+            emit_event_to_java(EV_ABS, 4, dv);
         }
     } else if (ev->type == EV_SYN) {
         emit(EV_SYN, SYN_REPORT, 0);
@@ -153,7 +178,7 @@ static void sig_handler(int s) { running = 0; }
 int main(int argc, char *argv[])
 {
     if (argc < 3) {
-        fprintf(stdout,"ERROR:usage: uinput_setup <left> <right> [fuzz flat invLX invLY invRX invRY mapA mapB mapX mapY mapR mapZR mapPlus mapR3 mapL mapZL mapMinus mapL3 mapHome]\n");
+        fprintf(stdout,"ERROR:usage: uinput_setup <left> <right> [fuzz flat invLX invLY invRX invRY mapA mapB mapX mapY mapR mapZR mapPlus mapR3 mapL mapZL mapMinus mapL3 mapHome mapCapture]\n");
         fflush(stdout); return 1;
     }
 
@@ -177,7 +202,8 @@ int main(int argc, char *argv[])
     if (argc>18) map_zl     = atoi(argv[18]);
     if (argc>19) map_minus  = atoi(argv[19]);
     if (argc>20) map_l3     = atoi(argv[20]);
-    if (argc>21) map_home   = atoi(argv[21]);
+    if (argc>21) map_home    = atoi(argv[21]);
+    if (argc>22) map_capture = atoi(argv[22]);
 
     signal(SIGTERM, sig_handler);
     signal(SIGINT,  sig_handler);
@@ -194,8 +220,9 @@ int main(int argc, char *argv[])
     ioctl(uinput_fd, UI_SET_EVBIT, EV_SYN);
 
     int keys[]={0x130,0x131,0x132,0x133,0x134,0x135,0x136,
-                0x137,0x138,0x139,0x13a,0x13b,0x13c,0x13d,0x13e};
-    for (int i=0;i<15;i++) ioctl(uinput_fd, UI_SET_KEYBIT, keys[i]);
+                0x137,0x138,0x139,0x13a,0x13b,0x13c,0x13d,0x13e,
+                0xa7};
+    for (int i=0;i<16;i++) ioctl(uinput_fd, UI_SET_KEYBIT, keys[i]);
     int abits[]={ABS_X,ABS_Y,ABS_RX,ABS_RY,ABS_HAT0X,ABS_HAT0Y};
     for (int i=0;i<6;i++) ioctl(uinput_fd, UI_SET_ABSBIT, abits[i]);
 

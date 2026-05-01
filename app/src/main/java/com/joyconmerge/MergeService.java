@@ -43,6 +43,7 @@ public class MergeService extends Service {
     public interface StatusCallback {
         void onStatus(String msg);
         void onEvent(String event);
+        void onDevices(String left, String right);
     }
 
     public class LocalBinder extends android.os.Binder {
@@ -62,19 +63,20 @@ public class MergeService extends Service {
     private int mapR=0x137,mapZR=0x139,mapPlus=0x13b,mapR3=0x13e;
     private int mapL=0x136,mapZL=0x138,mapMinus=0x13a,mapL3=0x13d;
     private int mapHome=0x13c;
+    private int mapCapture=0xa7;
 
     public void setConfig(int fuzz, int flat,
             int invLX, int invLY, int invRX, int invRY,
             int mapA, int mapB, int mapX, int mapY,
             int mapR, int mapZR, int mapPlus, int mapR3,
             int mapL, int mapZL, int mapMinus, int mapL3,
-            int mapHome) {
+            int mapHome, int mapCapture) {
         this.fuzz=fuzz; this.flat=flat;
         this.invLX=invLX; this.invLY=invLY; this.invRX=invRX; this.invRY=invRY;
         this.mapA=mapA; this.mapB=mapB; this.mapX=mapX; this.mapY=mapY;
         this.mapR=mapR; this.mapZR=mapZR; this.mapPlus=mapPlus; this.mapR3=mapR3;
         this.mapL=mapL; this.mapZL=mapZL; this.mapMinus=mapMinus; this.mapL3=mapL3;
-        this.mapHome=mapHome;
+        this.mapHome=mapHome; this.mapCapture=mapCapture;
     }
 
     @Override
@@ -193,6 +195,7 @@ public class MergeService extends Service {
         if (leftPath.isEmpty())  { notifyStatus("ERROR: Left Joy-Con not found");  return; }
         if (rightPath.isEmpty()) { notifyStatus("ERROR: Right Joy-Con not found"); return; }
         notifyStatus("Found: L=" + leftPath + " R=" + rightPath);
+        if (callback != null) callback.onDevices(leftPath, rightPath);
 
         // Build command: binary path + all config as args
         String cmd = binary.getAbsolutePath()
@@ -217,6 +220,7 @@ public class MergeService extends Service {
             + " " + mapMinus
             + " " + mapL3
             + " " + mapHome
+            + " " + mapCapture
             + "\n";
 
         try {
@@ -250,6 +254,8 @@ public class MergeService extends Service {
                     ready = true;
                     merging = true;
                     notifyStatus("RUNNING");
+                } else if (line.startsWith("EVENT:")) {
+                    notifyEvent(line.substring(6));
                 } else if (line.startsWith("ERROR:")) {
                     notifyStatus(line);
                     break;
@@ -269,6 +275,10 @@ public class MergeService extends Service {
 
     private void notifyStatus(String msg) {
         if (callback != null) callback.onStatus(msg);
+    }
+
+    private void notifyEvent(String event) {
+        if (callback != null) callback.onEvent(event);
     }
 
     public void setStatusCallback(StatusCallback cb) { this.callback = cb; }

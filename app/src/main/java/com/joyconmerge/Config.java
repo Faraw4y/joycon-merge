@@ -38,13 +38,14 @@ public class Config {
     public int getMapMinus(){ return prefs.getInt("mMinus", 0x13a); }
     public int getMapL3() { return prefs.getInt("mL3", 0x13d); }
     public int getMapHome(){ return prefs.getInt("mHome", 0x13c); }
+    public int getMapCapture(){ return prefs.getInt("mCapture", 0xa7); }
 
     public void save(int fuzz, int flat,
                      boolean invLX, boolean invLY, boolean invRX, boolean invRY,
                      int mA, int mB, int mX, int mY,
                      int mR, int mZR, int mPlus, int mR3,
                      int mL, int mZL, int mMinus, int mL3,
-                     int mHome) {
+                     int mHome, int mCapture) {
         prefs.edit()
             .putInt("fuzz", fuzz).putInt("flat", flat)
             .putBoolean("invLX", invLX).putBoolean("invLY", invLY)
@@ -56,6 +57,7 @@ public class Config {
             .putInt("mL", mL).putInt("mZL", mZL)
             .putInt("mMinus", mMinus).putInt("mL3", mL3)
             .putInt("mHome", mHome)
+            .putInt("mCapture", mCapture)
             .apply();
     }
 }

@@ -9,6 +9,9 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.*;
 import androidx.activity.result.ActivityResultLauncher;
@@ -26,25 +29,47 @@ public class MainActivity extends AppCompatActivity {
     private Config config;
 
     private TextView tvStatus;
+    private TextView tvDevices;
     private Button btnToggle;
     private Spinner spA, spB, spX, spY, spR, spZR, spPlus, spR3;
     private Spinner spL, spZL, spMinus, spL3;
     private SeekBar sbFlat, sbFuzz;
     private TextView tvFlat, tvFuzz;
     private CheckBox cbInvLX, cbInvLY, cbInvRX, cbInvRY;
-    private TextView tvTestOutput;
+    private GamepadView gamepadView;
+    private TextView tvLastBtn;
     private View tabStatus, tabRemap, tabCalib, tabTest;
 
     private static final String[] BTN_NAMES = {
         "BTN_SOUTH (A)","BTN_EAST (B)","BTN_NORTH (X)","BTN_WEST (Y)",
         "BTN_TL (L)","BTN_TR (R)","BTN_TL2 (ZL)","BTN_TR2 (ZR)",
-        "BTN_START (+)","BTN_SELECT (-)","BTN_THUMBL (L3)","BTN_THUMBR (R3)"
+        "BTN_START (+)","BTN_SELECT (-)", "BTN_THUMBL (L3)","BTN_THUMBR (R3)"
     };
     private static final int[] BTN_CODES = {
         0x130,0x131,0x133,0x134,
-        0x135,0x136,0x139,0x137,
-        0x13b,0x13a,0x13c,0x13d
+        0x136,0x137,0x138,0x139,
+        0x13b,0x13a,0x13d,0x13e
     };
+
+    private static String keyCodeToName(int code) {
+        switch (code) {
+            case 0x130: return GamepadView.BTN_A;
+            case 0x131: return GamepadView.BTN_B;
+            case 0x133: return GamepadView.BTN_X;
+            case 0x134: return GamepadView.BTN_Y;
+            case 0x136: return GamepadView.BTN_L;
+            case 0x137: return GamepadView.BTN_R;
+            case 0x138: return GamepadView.BTN_ZL;
+            case 0x139: return GamepadView.BTN_ZR;
+            case 0x13a: return GamepadView.BTN_MINUS;
+            case 0x13b: return GamepadView.BTN_PLUS;
+            case 0x13c: return GamepadView.BTN_HOME;
+            case 0x13d: return GamepadView.BTN_L3;
+            case 0x13e: return GamepadView.BTN_R3;
+            case 0xa7:  return GamepadView.BTN_CAP;
+            default:    return null;
+        }
+    }
 
     private ActivityResultLauncher<String[]> permissionLauncher;
 
@@ -59,7 +84,11 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> handleStatus(msg));
                 }
                 @Override public void onEvent(String event) {
-                    runOnUiThread(() -> appendTestEvent(event));
+                    runOnUiThread(() -> handleEvent(event));
+                }
+                @Override public void onDevices(String left, String right) {
+                    runOnUiThread(() -> tvDevices.setText(
+                        "L Joy-Con: " + left + "\nR Joy-Con: " + right));
                 }
             });
             updateToggleButton();
@@ -96,6 +125,7 @@ public class MainActivity extends AppCompatActivity {
         tabCalib  = findViewById(R.id.tab_calib);
         tabTest   = findViewById(R.id.tab_test);
         tvStatus  = findViewById(R.id.tv_status);
+        tvDevices = findViewById(R.id.tv_devices);
         btnToggle = findViewById(R.id.btn_toggle);
         spA=findViewById(R.id.sp_a); spB=findViewById(R.id.sp_b);
         spX=findViewById(R.id.sp_x); spY=findViewById(R.id.sp_y);
@@ -107,11 +137,16 @@ public class MainActivity extends AppCompatActivity {
         tvFlat=findViewById(R.id.tv_flat); tvFuzz=findViewById(R.id.tv_fuzz);
         cbInvLX=findViewById(R.id.cb_inv_lx); cbInvLY=findViewById(R.id.cb_inv_ly);
         cbInvRX=findViewById(R.id.cb_inv_rx); cbInvRY=findViewById(R.id.cb_inv_ry);
-        tvTestOutput=findViewById(R.id.tv_test_output);
+        gamepadView = findViewById(R.id.gamepad_view);
+        tvLastBtn   = findViewById(R.id.tv_last_btn);
+
         btnToggle.setOnClickListener(v -> toggleMerge());
         findViewById(R.id.btn_save_remap).setOnClickListener(v -> saveRemap());
         findViewById(R.id.btn_save_calib).setOnClickListener(v -> saveCalib());
-        findViewById(R.id.btn_clear_test).setOnClickListener(v -> tvTestOutput.setText(""));
+        findViewById(R.id.btn_reset_test).setOnClickListener(v -> {
+            gamepadView.resetAll();
+            tvLastBtn.setText("—");
+        });
     }
 
     private void setupTabs() {
@@ -177,6 +212,97 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void handleEvent(String event) {
+        if (event == null) return;
+        String[] parts = event.split(" ");
+        if (parts.length < 3) return;
+        try {
+            if ("KEY".equals(parts[0])) {
+                int code  = Integer.parseInt(parts[1]);
+                int value = Integer.parseInt(parts[2]);
+                String btnName = keyCodeToName(code);
+                if (btnName != null) {
+                    gamepadView.setButtonPressed(btnName, value != 0);
+                    if (value != 0) tvLastBtn.setText(btnName);
+                }
+            } else if ("ABS".equals(parts[0])) {
+                int axis  = Integer.parseInt(parts[1]);
+                float val = Float.parseFloat(parts[2]) / 32767f;
+                switch (axis) {
+                    case 0: gamepadView.setStick(true,  val, gamepadView.getLY()); break;
+                    case 1: gamepadView.setStick(true,  gamepadView.getLX(), val); break;
+                    case 3: gamepadView.setStick(false, val, gamepadView.getRY()); break;
+                    case 4: gamepadView.setStick(false, gamepadView.getRX(), val); break;
+                }
+            } else if ("DPAD".equals(parts[0])) {
+                String dir = parts[1];
+                int value = Integer.parseInt(parts[2]);
+                switch (dir) {
+                    case "up":    gamepadView.setButtonPressed(GamepadView.DPAD_UP,    value!=0); break;
+                    case "down":  gamepadView.setButtonPressed(GamepadView.DPAD_DOWN,  value!=0); break;
+                    case "left":  gamepadView.setButtonPressed(GamepadView.DPAD_LEFT,  value!=0); break;
+                    case "right": gamepadView.setButtonPressed(GamepadView.DPAD_RIGHT, value!=0); break;
+                }
+            }
+        } catch (NumberFormatException ignored) {}
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent ev) {
+        if ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0) {
+            gamepadView.setStick(true,
+                ev.getAxisValue(MotionEvent.AXIS_X),
+                ev.getAxisValue(MotionEvent.AXIS_Y));
+            gamepadView.setStick(false,
+                ev.getAxisValue(MotionEvent.AXIS_RX),
+                ev.getAxisValue(MotionEvent.AXIS_RY));
+            float hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X);
+            float hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
+            gamepadView.setButtonPressed(GamepadView.DPAD_LEFT,  hx < -0.5f);
+            gamepadView.setButtonPressed(GamepadView.DPAD_RIGHT, hx >  0.5f);
+            gamepadView.setButtonPressed(GamepadView.DPAD_UP,    hy < -0.5f);
+            gamepadView.setButtonPressed(GamepadView.DPAD_DOWN,  hy >  0.5f);
+            return true;
+        }
+        return super.dispatchGenericMotionEvent(ev);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent ev) {
+        if (ev.getSource() == InputDevice.SOURCE_GAMEPAD ||
+            (ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0) {
+            String name = androidKeyToName(ev.getKeyCode());
+            if (name != null) {
+                gamepadView.setButtonPressed(name, ev.getAction() == KeyEvent.ACTION_DOWN);
+                if (ev.getAction() == KeyEvent.ACTION_DOWN) tvLastBtn.setText(name);
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(ev);
+    }
+
+    private static String androidKeyToName(int kc) {
+        switch (kc) {
+            case KeyEvent.KEYCODE_BUTTON_A:      return GamepadView.BTN_A;
+            case KeyEvent.KEYCODE_BUTTON_B:      return GamepadView.BTN_B;
+            case KeyEvent.KEYCODE_BUTTON_X:      return GamepadView.BTN_X;
+            case KeyEvent.KEYCODE_BUTTON_Y:      return GamepadView.BTN_Y;
+            case KeyEvent.KEYCODE_BUTTON_L1:     return GamepadView.BTN_L;
+            case KeyEvent.KEYCODE_BUTTON_R1:     return GamepadView.BTN_R;
+            case KeyEvent.KEYCODE_BUTTON_L2:     return GamepadView.BTN_ZL;
+            case KeyEvent.KEYCODE_BUTTON_R2:     return GamepadView.BTN_ZR;
+            case KeyEvent.KEYCODE_BUTTON_START:  return GamepadView.BTN_PLUS;
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return GamepadView.BTN_MINUS;
+            case KeyEvent.KEYCODE_BUTTON_THUMBL: return GamepadView.BTN_L3;
+            case KeyEvent.KEYCODE_BUTTON_THUMBR: return GamepadView.BTN_R3;
+            case KeyEvent.KEYCODE_DPAD_UP:       return GamepadView.DPAD_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN:     return GamepadView.DPAD_DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT:     return GamepadView.DPAD_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:    return GamepadView.DPAD_RIGHT;
+            default: return null;
+        }
+    }
+
     private void toggleMerge() {
         if (bound && service.isMerging()) {
             Intent intent = new Intent(this, MergeService.class);
@@ -225,7 +351,7 @@ public class MainActivity extends AppCompatActivity {
             config.getMapPlus(),config.getMapR3(),
             config.getMapL(),  config.getMapZL(),
             config.getMapMinus(),config.getMapL3(),
-            config.getMapHome()
+            config.getMapHome(), config.getMapCapture()
         );
     }
 
@@ -238,7 +364,7 @@ public class MainActivity extends AppCompatActivity {
             BTN_CODES[spPlus.getSelectedItemPosition()],BTN_CODES[spR3.getSelectedItemPosition()],
             BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
             BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
-            config.getMapHome());
+            config.getMapHome(), config.getMapCapture());
         Toast.makeText(this,"Button mapping saved!",Toast.LENGTH_SHORT).show();
         applyConfigToService();
     }
@@ -249,31 +375,15 @@ public class MainActivity extends AppCompatActivity {
             config.getMapA(),config.getMapB(),config.getMapX(),config.getMapY(),
             config.getMapR(),config.getMapZR(),config.getMapPlus(),config.getMapR3(),
             config.getMapL(),config.getMapZL(),config.getMapMinus(),config.getMapL3(),
-            config.getMapHome());
+            config.getMapHome(), config.getMapCapture());
         Toast.makeText(this,"Calibration saved!",Toast.LENGTH_SHORT).show();
         applyConfigToService();
     }
 
     private void handleStatus(String msg) {
         tvStatus.setText(msg);
-        if (msg.equals("RUNNING"))  { merging(true);  }
-        if (msg.equals("STOPPED"))  { merging(false); }
-        updateToggleButton();
-    }
-
-    private void merging(boolean on) {
-        if (bound) {} // service.merging is updated by service itself
-    }
-
-    private static final int MAX_TEST_LINES = 50;
-    private void appendTestEvent(String event) {
-        String current = tvTestOutput.getText().toString();
-        String[] lines = current.split("\n");
-        StringBuilder sb = new StringBuilder();
-        int start = Math.max(0, lines.length-(MAX_TEST_LINES-1));
-        if (!current.isEmpty()) for (int i=start;i<lines.length;i++) sb.append(lines[i]).append("\n");
-        sb.append(event);
-        tvTestOutput.setText(sb.toString());
+        if (msg.equals("RUNNING"))  updateToggleButton();
+        if (msg.equals("STOPPED"))  { updateToggleButton(); tvDevices.setText("—"); }
     }
 
     private void updateToggleButton() {
