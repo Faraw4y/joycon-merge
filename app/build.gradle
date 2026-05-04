@@ -40,6 +40,11 @@ android {
         }
     }
 
+    buildFeatures {
+        viewBinding true
+        // Diperlukan agar AIDL ter-generate
+        aidlPackagedList = []
+    }
 
     // Aktifkan AIDL processing
     buildFeatures {
