@@ -5,7 +5,9 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -90,16 +92,16 @@ public class MergeService extends Service {
         .debuggable(false)
         .version(BuildConfig.VERSION_CODE);
 
-    private final Shizuku.UserServiceConnection userServiceConn =
-        new Shizuku.UserServiceConnection() {
+    private final ServiceConnection userServiceConn =
+        new ServiceConnection() {
             @Override
-            public void onServiceConnected(android.content.ComponentName name,
+            public void onServiceConnected(ComponentName name,
                                            android.os.IBinder service) {
                 userService = IUserService.Stub.asInterface(service);
                 notifyStatus("Shizuku service connected");
             }
             @Override
-            public void onServiceDisconnected(android.content.ComponentName name) {
+            public void onServiceDisconnected(ComponentName name) {
                 userService = null;
                 if (merging) {
                     merging = false;
