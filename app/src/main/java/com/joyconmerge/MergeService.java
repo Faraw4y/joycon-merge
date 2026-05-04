@@ -112,11 +112,26 @@ public class MergeService extends Service {
 
     // ─── Lifecycle ───────────────────────────────────────────────────────────
 
+    // ─── Shizuku binder listeners ──────────────────────────────────────────────
+
+    private final Shizuku.OnBinderReceivedListener binderReceivedListener = () -> {
+        Shizuku.bindUserService(userServiceArgs, userServiceConn);
+    };
+
+    private final Shizuku.OnBinderDeadListener binderDeadListener = () -> {
+        userService = null;
+        if (merging) {
+            merging = false;
+            notifyStatus("STOPPED");
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        Shizuku.bindUserService(userServiceArgs, userServiceConn);
+        Shizuku.addBinderReceivedListenerSticky(binderReceivedListener);
+        Shizuku.addBinderDeadListener(binderDeadListener);
     }
 
     @Override
@@ -141,6 +156,8 @@ public class MergeService extends Service {
     public void onDestroy() {
         super.onDestroy();
         doStop();
+        Shizuku.removeBinderReceivedListener(binderReceivedListener);
+        Shizuku.removeBinderDeadListener(binderDeadListener);
         Shizuku.unbindUserService(userServiceArgs, userServiceConn, true);
     }
 
