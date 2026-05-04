@@ -115,7 +115,9 @@ public class MergeService extends Service {
     // ─── Shizuku binder listeners ──────────────────────────────────────────────
 
     private final Shizuku.OnBinderReceivedListener binderReceivedListener = () -> {
-        Shizuku.bindUserService(userServiceArgs, userServiceConn);
+        if (Shizuku.pingBinder()) {
+            Shizuku.bindUserService(userServiceArgs, userServiceConn);
+        }
     };
 
     private final Shizuku.OnBinderDeadListener binderDeadListener = () -> {
