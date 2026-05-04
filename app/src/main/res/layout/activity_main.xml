@@ -4,363 +4,157 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/bg">
+    android:background="#1a1a2e">
 
+    <!-- ═══ Shizuku Status Banner ═══ -->
+    <LinearLayout
+        android:id="@+id/shizuku_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#B71C1C"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_shizuku_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⚠ Shizuku belum siap"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btn_grant_shizuku"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Izinkan Shizuku"
+            android:textSize="12sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- ═══ Header ═══ -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Joy-Con Merge"
-        android:textSize="20sp"
-        android:textColor="@color/text_primary"
-        android:fontFamily="sans-serif-medium"
-        android:padding="16dp"/>
+        android:text="🎮 Joy-Con Merge (Shizuku)"
+        android:textColor="#E0E0FF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:paddingTop="12dp"
+        android:paddingBottom="4dp" />
 
+    <!-- ═══ Tabs ═══ -->
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/tabs"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        app:tabMode="fixed"
-        app:tabGravity="fill"
-        app:tabTextColor="@color/text_secondary"
-        app:tabSelectedTextColor="@color/text_primary"
-        app:tabIndicatorColor="@color/text_primary"
-        android:background="@color/surface">
-        <com.google.android.material.tabs.TabItem android:text="Status"/>
-        <com.google.android.material.tabs.TabItem android:text="Remap"/>
-        <com.google.android.material.tabs.TabItem android:text="Calibrate"/>
-        <com.google.android.material.tabs.TabItem android:text="Test"/>
+        app:tabTextColor="#90A4AE"
+        app:tabSelectedTextColor="#FFFFFF"
+        app:tabIndicatorColor="#7C4DFF"
+        android:background="#16213e">
+        <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Status" />
+        <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Remap" />
+        <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Calib" />
+        <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Test" />
     </com.google.android.material.tabs.TabLayout>
 
-    <ScrollView
-        android:layout_width="match_parent"
-        android:layout_height="match_parent">
+    <!-- ═══ TAB: Status ═══ -->
+    <ScrollView android:id="@+id/tab_status" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="visible">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <!-- STATUS TAB -->
-            <LinearLayout android:id="@+id/tab_status"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <Button android:id="@+id/btn_toggle"
-                    android:layout_width="match_parent"
-                    android:layout_height="64dp"
-                    android:text="Start"
-                    android:textSize="18sp"
-                    android:textColor="#FFFFFF"
-                    android:backgroundTint="#43A047"
-                    android:layout_marginBottom="16dp"/>
-
-                <LinearLayout style="@style/Card" android:orientation="vertical">
-                    <TextView android:text="Status" style="@style/CardTitle"/>
-                    <TextView android:id="@+id/tv_status"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Not running"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="14sp"/>
-                </LinearLayout>
-
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-                    <TextView android:text="Detected devices" style="@style/CardTitle"/>
-                    <TextView android:id="@+id/tv_devices"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="—"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="13sp"
-                        android:fontFamily="monospace"/>
-                </LinearLayout>
-
-                <!-- MANUAL OVERRIDE CARD -->
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-                    <TextView android:text="Manual Override (for misdetected Joy-Con)"
-                        style="@style/CardTitle"/>
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Kalau Joy-Con 2 terbaca kanan semua, pilih path-nya manual di sini."
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp"
-                        android:layout_marginBottom="8dp"/>
-                    <TextView android:text="Left Joy-Con path:" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_left_path" style="@style/Spinner"
-                        android:layout_marginBottom="8dp"/>
-                    <TextView android:text="Right Joy-Con path:" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_right_path" style="@style/Spinner"
-                        android:layout_marginBottom="12dp"/>
-                    <Button android:id="@+id/btn_scan_paths"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="🔍 Scan /dev/input/event*"
-                        android:textColor="@color/text_primary"
-                        android:backgroundTint="@color/surface"
-                        android:layout_marginBottom="8dp"/>
-                    <CheckBox android:id="@+id/cb_use_manual"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Use manual path selection"
-                        android:textColor="@color/text_primary"/>
-                </LinearLayout>
-
-                <!-- MANUAL OVERRIDE CARD -->
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-                        <TextView android:text="Manual Override"
-                            style="@style/CardTitle"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"/>
-                        <CheckBox android:id="@+id/cb_manual_mode"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="false"/>
-                    </LinearLayout>
-
-                    <Button android:id="@+id/btn_scan"
-                        android:layout_width="match_parent"
-                        android:layout_height="40dp"
-                        android:text="🔍 Scan devices"
-                        android:textSize="13sp"
-                        android:backgroundTint="#37474F"
-                        android:textColor="#FFFFFF"
-                        android:layout_marginBottom="8dp"/>
-
-                    <!-- Dropdown panel — hidden until checkbox ticked -->
-                    <LinearLayout android:id="@+id/card_manual"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:visibility="gone">
-
-                        <TextView android:text="Left Joy-Con (L)"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="12sp"
-                            android:layout_marginTop="4dp"/>
-                        <Spinner android:id="@+id/sp_manual_left"
-                            style="@style/Spinner"
-                            android:layout_marginBottom="8dp"/>
-
-                        <TextView android:text="Right Joy-Con (R)"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="12sp"/>
-                        <Spinner android:id="@+id/sp_manual_right"
-                            style="@style/Spinner"
-                            android:layout_marginBottom="4dp"/>
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="⚠ Pilih path yang berbeda untuk L dan R. Tekan Start setelah memilih."
-                            android:textColor="#FFB300"
-                            android:textSize="11sp"
-                            android:layout_marginTop="4dp"/>
-                    </LinearLayout>
-                </LinearLayout>
-
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp" android:layout_marginBottom="12dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Status" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="12sp"/>
+                <TextView android:id="@+id/tv_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textColor="#E0E0E0" android:textSize="14sp" android:layout_marginTop="4dp"/>
             </LinearLayout>
 
-            <!-- REMAP TAB -->
-            <LinearLayout android:id="@+id/tab_remap"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <LinearLayout style="@style/Card" android:orientation="vertical">
-                    <TextView android:text="Right Joy-Con" style="@style/CardTitle"/>
-                    <include layout="@layout/row_spinner" android:id="@+id/row_a"/>
-                    <!-- We inline spinners directly -->
-                    <TextView android:text="A button" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_a" style="@style/Spinner"/>
-                    <TextView android:text="B button" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_b" style="@style/Spinner"/>
-                    <TextView android:text="X button" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_x" style="@style/Spinner"/>
-                    <TextView android:text="Y button" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_y" style="@style/Spinner"/>
-                    <TextView android:text="R" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_r" style="@style/Spinner"/>
-                    <TextView android:text="ZR" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_zr" style="@style/Spinner"/>
-                    <TextView android:text="+ (Plus)" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_plus" style="@style/Spinner"/>
-                    <TextView android:text="R3 (stick click)" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_r3" style="@style/Spinner"/>
-                </LinearLayout>
-
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-                    <TextView android:text="Left Joy-Con" style="@style/CardTitle"/>
-                    <TextView android:text="L" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_l" style="@style/Spinner"/>
-                    <TextView android:text="ZL" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_zl" style="@style/Spinner"/>
-                    <TextView android:text="- (Minus)" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_minus" style="@style/Spinner"/>
-                    <TextView android:text="L3 (stick click)" style="@style/RowLabel"/>
-                    <Spinner android:id="@+id/sp_l3" style="@style/Spinner"/>
-                </LinearLayout>
-
-                <Button android:id="@+id/btn_save_remap"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Save mapping"
-                    android:layout_marginTop="12dp"
-                    android:backgroundTint="@color/text_primary"
-                    android:textColor="@color/bg"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp" android:layout_marginBottom="12dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Devices" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="12sp"/>
+                <TextView android:id="@+id/tv_devices" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textColor="#B0BEC5" android:textSize="12sp" android:fontFamily="monospace" android:layout_marginTop="4dp"/>
             </LinearLayout>
 
-            <!-- CALIBRATE TAB -->
-            <LinearLayout android:id="@+id/tab_calib"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <LinearLayout style="@style/Card" android:orientation="vertical">
-                    <TextView android:text="Deadzone (flat)" style="@style/CardTitle"/>
-                    <TextView android:id="@+id/tv_flat"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary"
-                        android:textSize="24sp"
-                        android:fontFamily="sans-serif-medium"
-                        android:layout_marginBottom="8dp"/>
-                    <SeekBar android:id="@+id/sb_flat"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:max="16384"/>
-                    <TextView android:text="Higher = more dead center. Raise if sticks drift."
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp"
-                        android:layout_marginTop="4dp"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"/>
-                </LinearLayout>
-
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-                    <TextView android:text="Noise filter (fuzz)" style="@style/CardTitle"/>
-                    <TextView android:id="@+id/tv_fuzz"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary"
-                        android:textSize="24sp"
-                        android:fontFamily="sans-serif-medium"
-                        android:layout_marginBottom="8dp"/>
-                    <SeekBar android:id="@+id/sb_fuzz"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:max="2048"/>
-                    <TextView android:text="Higher = smoother but less precise."
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp"
-                        android:layout_marginTop="4dp"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"/>
-                </LinearLayout>
-
-                <LinearLayout style="@style/Card" android:orientation="vertical"
-                    android:layout_marginTop="12dp">
-                    <TextView android:text="Invert axes" style="@style/CardTitle"/>
-                    <CheckBox android:id="@+id/cb_inv_lx" android:text="Invert left X"
-                        android:textColor="@color/text_primary"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                    <CheckBox android:id="@+id/cb_inv_ly" android:text="Invert left Y"
-                        android:textColor="@color/text_primary"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                    <CheckBox android:id="@+id/cb_inv_rx" android:text="Invert right X"
-                        android:textColor="@color/text_primary"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                    <CheckBox android:id="@+id/cb_inv_ry" android:text="Invert right Y"
-                        android:textColor="@color/text_primary"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                </LinearLayout>
-
-                <Button android:id="@+id/btn_save_calib"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Save calibration"
-                    android:layout_marginTop="12dp"
-                    android:backgroundTint="@color/text_primary"
-                    android:textColor="@color/bg"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp" android:layout_marginBottom="12dp">
+                <CheckBox android:id="@+id/cb_use_manual" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Manual Override" android:textColor="#E0E0E0" android:buttonTint="#7C4DFF"/>
+                <Button android:id="@+id/btn_scan_paths" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="🔍 Scan Devices" android:layout_marginTop="6dp" android:textSize="12sp"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Left Joy-Con" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <Spinner android:id="@+id/sp_left_path" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right Joy-Con" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <Spinner android:id="@+id/sp_right_path" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
             </LinearLayout>
 
-            <!-- TEST TAB -->
-            <LinearLayout android:id="@+id/tab_test"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <LinearLayout style="@style/Card" android:orientation="vertical">
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-                        <TextView android:text="GAMEPAD TESTER" style="@style/CardTitle"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"/>
-                        <Button android:id="@+id/btn_reset_test"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Reset"
-                            android:textSize="12sp"
-                            style="?android:attr/borderlessButtonStyle"/>
-                    </LinearLayout>
-
-                    <TextView android:text="Start merge then press buttons — they light up below."
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"/>
-
-                    <com.joyconmerge.GamepadView
-                        android:id="@+id/gamepad_view"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"/>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-                        <TextView
-                            android:text="Last pressed: "
-                            android:textColor="@color/text_secondary"
-                            android:textSize="13sp"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"/>
-                        <TextView android:id="@+id/tv_last_btn"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="—"
-                            android:textColor="@color/text_primary"
-                            android:textSize="15sp"
-                            android:fontFamily="sans-serif-medium"/>
-                    </LinearLayout>
-                </LinearLayout>
-            </LinearLayout>
-
+            <Button android:id="@+id/btn_toggle" android:layout_width="match_parent" android:layout_height="56dp" android:text="Start" android:textSize="18sp" android:textStyle="bold" android:textColor="#FFFFFF" android:backgroundTint="#43A047" android:layout_marginTop="4dp"/>
         </LinearLayout>
     </ScrollView>
+
+    <!-- ═══ TAB: Remap ═══ -->
+    <ScrollView android:id="@+id/tab_remap" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Right Joy-Con Buttons" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="13sp" android:layout_marginBottom="8dp"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="A" android:textColor="#90A4AE" android:textSize="12sp"/>
+                <Spinner android:id="@+id/sp_a" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="B" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_b" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="X" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_x" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Y" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_y" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="R" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_r" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ZR" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_zr" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_plus" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="R3" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_r3" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp" android:layout_marginTop="12dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Left Joy-Con Buttons" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="13sp" android:layout_marginBottom="8dp"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="L" android:textColor="#90A4AE" android:textSize="12sp"/>
+                <Spinner android:id="@+id/sp_l" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ZL" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_zl" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="−" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_minus" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="L3" android:textColor="#90A4AE" android:textSize="12sp" android:layout_marginTop="6dp"/>
+                <Spinner android:id="@+id/sp_l3" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/spinner_bg"/>
+            </LinearLayout>
+            <Button android:id="@+id/btn_save_remap" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="💾 Save Mapping" android:layout_marginTop="12dp" android:backgroundTint="#7C4DFF"/>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ═══ TAB: Calib ═══ -->
+    <ScrollView android:id="@+id/tab_calib" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card_bg" android:padding="12dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Stick Calibration" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="13sp"/>
+                <TextView android:id="@+id/tv_fuzz" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Fuzz: 256" android:textColor="#E0E0E0" android:layout_marginTop="12dp"/>
+                <SeekBar android:id="@+id/sb_fuzz" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="1024"/>
+                <TextView android:id="@+id/tv_flat" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Flat: 4096" android:textColor="#E0E0E0" android:layout_marginTop="12dp"/>
+                <SeekBar android:id="@+id/sb_flat" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="16383"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Invert Axes" android:textColor="#7C4DFF" android:textStyle="bold" android:textSize="13sp" android:layout_marginTop="16dp"/>
+                <CheckBox android:id="@+id/cb_inv_lx" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Invert Left X" android:textColor="#E0E0E0" android:buttonTint="#7C4DFF"/>
+                <CheckBox android:id="@+id/cb_inv_ly" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Invert Left Y" android:textColor="#E0E0E0" android:buttonTint="#7C4DFF"/>
+                <CheckBox android:id="@+id/cb_inv_rx" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Invert Right X" android:textColor="#E0E0E0" android:buttonTint="#7C4DFF"/>
+                <CheckBox android:id="@+id/cb_inv_ry" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Invert Right Y" android:textColor="#E0E0E0" android:buttonTint="#7C4DFF"/>
+            </LinearLayout>
+            <Button android:id="@+id/btn_save_calib" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="💾 Save Calibration" android:layout_marginTop="12dp" android:backgroundTint="#7C4DFF"/>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ═══ TAB: Test ═══ -->
+    <LinearLayout android:id="@+id/tab_test" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="16dp" android:visibility="gone">
+        <com.joyconmerge.GamepadView android:id="@+id/gamepad_view" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="8dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Last: " android:textColor="#90A4AE"/>
+            <TextView android:id="@+id/tv_last_btn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="2" android:text="—" android:textColor="#E0E0E0" android:textStyle="bold"/>
+            <Button android:id="@+id/btn_reset_test" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Reset" android:textSize="11sp"/>
+        </LinearLayout>
+    </LinearLayout>
 
 </LinearLayout>

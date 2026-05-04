@@ -1,21 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Core foreground service -->
+    <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Bluetooth permissions (required for connectedDevice FGS type on Android 12+) -->
+    <!-- Bluetooth (dibutuhkan untuk FGS type connectedDevice di Android 12+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- USB (for USB HID joystick access) -->
-    <uses-permission android:name="android.permission.USB_PERMISSION"
-        tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools"/>
+    <!-- TIDAK ada MANAGE_USB atau ProtectedPermission root di sini -->
 
     <application
         android:allowBackup="true"
@@ -39,6 +37,11 @@
             android:name=".MergeService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!--
+            UserService di-spawn oleh Shizuku — TIDAK perlu di-declare di manifest app kita.
+            Shizuku me-launch class ini di dalam proses privileged-nya sendiri.
+        -->
 
         <receiver
             android:name=".BootReceiver"

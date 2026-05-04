@@ -19,12 +19,11 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import com.google.android.material.tabs.TabLayout;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
+
 import java.util.ArrayList;
 import java.util.List;
+
+import rikka.shizuku.Shizuku;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -32,12 +31,16 @@ public class MainActivity extends AppCompatActivity {
     private boolean bound = false;
     private Config config;
 
+    // Status Shizuku
+    private View shizukuBanner;
+    private TextView tvShizukuStatus;
+    private Button btnGrantShizuku;
+
     private TextView tvStatus;
     private TextView tvDevices;
     private Button btnToggle;
     private Spinner spA, spB, spX, spY, spR, spZR, spPlus, spR3;
     private Spinner spL, spZL, spMinus, spL3;
-    // Manual override
     private Spinner spLeftPath, spRightPath;
     private CheckBox cbUseManual;
     private List<String> eventPaths = new ArrayList<>();
@@ -50,46 +53,32 @@ public class MainActivity extends AppCompatActivity {
     private View tabStatus, tabRemap, tabCalib, tabTest;
 
     private static final String[] BTN_NAMES = {
-        "BTN_SOUTH (B/Cross)",   // 0x130 = 304
-        "BTN_EAST (A/Circle)",   // 0x131 = 305
-        "BTN_NORTH (Y/Triangle)",// 0x133 = 307
-        "BTN_WEST (X/Square)",   // 0x134 = 308
-        "BTN_TL (L)",            // 0x136 = 310
-        "BTN_TR (R)",            // 0x137 = 311
-        "BTN_TL2 (ZL)",          // 0x138 = 312
-        "BTN_TR2 (ZR)",          // 0x139 = 313
-        "BTN_SELECT (−)",        // 0x13a = 314
-        "BTN_START (+)",         // 0x13b = 315
-        "BTN_THUMBL (L3)",       // 0x13d = 317
-        "BTN_THUMBR (R3)"        // 0x13e = 318
+        "BTN_SOUTH (B/Cross)", "BTN_EAST (A/Circle)", "BTN_NORTH (Y/Triangle)",
+        "BTN_WEST (X/Square)", "BTN_TL (L)", "BTN_TR (R)", "BTN_TL2 (ZL)", "BTN_TR2 (ZR)",
+        "BTN_SELECT (−)", "BTN_START (+)", "BTN_THUMBL (L3)", "BTN_THUMBR (R3)"
     };
     private static final int[] BTN_CODES = {
-        0x130, 0x131, 0x133, 0x134,
-        0x136, 0x137, 0x138, 0x139,
-        0x13a, 0x13b, 0x13d, 0x13e
+        0x130,0x131,0x133,0x134, 0x136,0x137,0x138,0x139, 0x13a,0x13b,0x13d,0x13e
     };
 
-    private static String keyCodeToName(int code) {
-        switch (code) {
-            case 0x131: return GamepadView.BTN_A;
-            case 0x130: return GamepadView.BTN_B;
-            case 0x133: return GamepadView.BTN_X;
-            case 0x134: return GamepadView.BTN_Y;
-            case 0x136: return GamepadView.BTN_L;
-            case 0x137: return GamepadView.BTN_R;
-            case 0x138: return GamepadView.BTN_ZL;
-            case 0x139: return GamepadView.BTN_ZR;
-            case 0x13a: return GamepadView.BTN_MINUS;
-            case 0x13b: return GamepadView.BTN_PLUS;
-            case 0x13c: return GamepadView.BTN_HOME;
-            case 0x13d: return GamepadView.BTN_L3;
-            case 0x13e: return GamepadView.BTN_R3;
-            case 0xa7:  return GamepadView.BTN_CAP;
-            default:    return null;
-        }
-    }
+    private static final int SHIZUKU_REQUEST_CODE = 100;
 
     private ActivityResultLauncher<String[]> permissionLauncher;
+
+    // ─── Shizuku permission listener ─────────────────────────────────────────
+
+    private final Shizuku.OnRequestPermissionResultListener shizukuPermResult =
+        (requestCode, grantResult) -> {
+            if (requestCode == SHIZUKU_REQUEST_CODE) {
+                runOnUiThread(this::updateShizukuBanner);
+                if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                    runOnUiThread(() -> Toast.makeText(this,
+                        "Shizuku granted! Bisa mulai merge.", Toast.LENGTH_SHORT).show());
+                }
+            }
+        };
+
+    // ─── ServiceConnection ────────────────────────────────────────────────────
 
     private final ServiceConnection conn = new ServiceConnection() {
         @Override
@@ -108,12 +97,9 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> tvDevices.setText(
                         "L Joy-Con: " + left + "\nR Joy-Con: " + right));
                 }
-                @Override public void onScanResult(java.util.List<String> allPaths, String autoLeft, String autoRight) {
-                    // Auto-scan result — only used in auto mode; manual mode uses its own scan
+                @Override public void onScanResult(List<String> allPaths, String autoLeft, String autoRight) {
                     runOnUiThread(() -> {
-                        if (cbUseManual == null || !cbUseManual.isChecked()) {
-                            // Nothing extra to do — devices shown via onDevices
-                        }
+                        // auto mode — tidak perlu populate spinner, sudah via auto-scan
                     });
                 }
             });
@@ -122,6 +108,8 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onServiceDisconnected(ComponentName name) { bound = false; }
     };
+
+    // ─── onCreate ─────────────────────────────────────────────────────────────
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -133,19 +121,39 @@ public class MainActivity extends AppCompatActivity {
         setupRemap();
         setupCalibrate();
 
+        Shizuku.addRequestPermissionResultListener(shizukuPermResult);
+
         permissionLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestMultiplePermissions(),
             results -> {
                 boolean allGranted = true;
-                for (Boolean g : results.values()) if (!g) { allGranted=false; break; }
+                for (Boolean g : results.values()) if (!g) { allGranted = false; break; }
                 if (allGranted) doStartMerge();
-                else Toast.makeText(this,"Bluetooth permissions required",Toast.LENGTH_LONG).show();
+                else Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_LONG).show();
             });
 
         bindService(new Intent(this, MergeService.class), conn, Context.BIND_AUTO_CREATE);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateShizukuBanner();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        Shizuku.removeRequestPermissionResultListener(shizukuPermResult);
+        if (bound) unbindService(conn);
+    }
+
+    // ─── Views ────────────────────────────────────────────────────────────────
+
     private void findViews() {
+        shizukuBanner    = findViewById(R.id.shizuku_banner);
+        tvShizukuStatus  = findViewById(R.id.tv_shizuku_status);
+        btnGrantShizuku  = findViewById(R.id.btn_grant_shizuku);
         tabStatus = findViewById(R.id.tab_status);
         tabRemap  = findViewById(R.id.tab_remap);
         tabCalib  = findViewById(R.id.tab_calib);
@@ -165,13 +173,12 @@ public class MainActivity extends AppCompatActivity {
         cbInvRX=findViewById(R.id.cb_inv_rx); cbInvRY=findViewById(R.id.cb_inv_ry);
         gamepadView = findViewById(R.id.gamepad_view);
         tvLastBtn   = findViewById(R.id.tv_last_btn);
-
-        // Manual override
         spLeftPath  = findViewById(R.id.sp_left_path);
         spRightPath = findViewById(R.id.sp_right_path);
         cbUseManual = findViewById(R.id.cb_use_manual);
-        findViewById(R.id.btn_scan_paths).setOnClickListener(v -> scanEventPaths());
 
+        btnGrantShizuku.setOnClickListener(v -> requestShizukuPermission());
+        findViewById(R.id.btn_scan_paths).setOnClickListener(v -> scanEventPaths());
         btnToggle.setOnClickListener(v -> toggleMerge());
         findViewById(R.id.btn_save_remap).setOnClickListener(v -> saveRemap());
         findViewById(R.id.btn_save_calib).setOnClickListener(v -> saveCalib());
@@ -180,6 +187,58 @@ public class MainActivity extends AppCompatActivity {
             tvLastBtn.setText("—");
         });
     }
+
+    // ─── Shizuku ─────────────────────────────────────────────────────────────
+
+    private boolean isShizukuPermissionGranted() {
+        try {
+            if (Shizuku.isPreV11()) return false;
+            return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
+        } catch (IllegalStateException e) {
+            // Shizuku belum berjalan
+            return false;
+        }
+    }
+
+    private void updateShizukuBanner() {
+        boolean running = isShizukuRunning();
+        boolean granted = isShizukuPermissionGranted();
+
+        if (granted) {
+            shizukuBanner.setVisibility(View.GONE);
+        } else {
+            shizukuBanner.setVisibility(View.VISIBLE);
+            if (!running) {
+                tvShizukuStatus.setText("⚠ Shizuku belum berjalan. Install & aktifkan Shizuku terlebih dulu.");
+                btnGrantShizuku.setVisibility(View.GONE);
+            } else {
+                tvShizukuStatus.setText("⚠ Izin Shizuku belum diberikan. Tap untuk mengizinkan.");
+                btnGrantShizuku.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    private boolean isShizukuRunning() {
+        try {
+            return Shizuku.pingBinder();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void requestShizukuPermission() {
+        try {
+            if (Shizuku.isPreV11()) {
+                Toast.makeText(this, "Shizuku terlalu lama, upgrade ke v11+", Toast.LENGTH_LONG).show();
+                return;
+            }
+            Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
+        } catch (IllegalStateException e) {
+            Toast.makeText(this, "Shizuku tidak berjalan", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ─── Tabs ─────────────────────────────────────────────────────────────────
 
     private void setupTabs() {
         TabLayout tabs = findViewById(R.id.tabs);
@@ -200,122 +259,73 @@ public class MainActivity extends AppCompatActivity {
         tabStatus.setVisibility(View.VISIBLE);
     }
 
-    private ArrayAdapter<String> makeAdapter() {
-        return new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, BTN_NAMES);
-    }
+    // ─── Scan event paths ─────────────────────────────────────────────────────
 
-    private void setupRemap() {
-        Spinner[] spinners={spA,spB,spX,spY,spR,spZR,spPlus,spR3,spL,spZL,spMinus,spL3};
-        for (Spinner sp : spinners) {
-            ArrayAdapter<String> ad = makeAdapter();
-            ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-            sp.setAdapter(ad);
-        }
-        spA.setSelection(codeToIdx(config.getMapA()));
-        spB.setSelection(codeToIdx(config.getMapB()));
-        spX.setSelection(codeToIdx(config.getMapX()));
-        spY.setSelection(codeToIdx(config.getMapY()));
-        spR.setSelection(codeToIdx(config.getMapR()));
-        spZR.setSelection(codeToIdx(config.getMapZR()));
-        spPlus.setSelection(codeToIdx(config.getMapPlus()));
-        spR3.setSelection(codeToIdx(config.getMapR3()));
-        spL.setSelection(codeToIdx(config.getMapL()));
-        spZL.setSelection(codeToIdx(config.getMapZL()));
-        spMinus.setSelection(codeToIdx(config.getMapMinus()));
-        spL3.setSelection(codeToIdx(config.getMapL3()));
-    }
-
-    private void setupCalibrate() {
-        sbFlat.setMax(16384); sbFlat.setProgress(config.getFlat());
-        sbFuzz.setMax(2048);  sbFuzz.setProgress(config.getFuzz());
-        tvFlat.setText(String.valueOf(config.getFlat()));
-        tvFuzz.setText(String.valueOf(config.getFuzz()));
-        cbInvLX.setChecked(config.getInvLX()); cbInvLY.setChecked(config.getInvLY());
-        cbInvRX.setChecked(config.getInvRX()); cbInvRY.setChecked(config.getInvRY());
-        sbFlat.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onProgressChanged(SeekBar sb,int p,boolean u){tvFlat.setText(String.valueOf(p));}
-            public void onStartTrackingTouch(SeekBar sb){}
-            public void onStopTrackingTouch(SeekBar sb){}
-        });
-        sbFuzz.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onProgressChanged(SeekBar sb,int p,boolean u){tvFuzz.setText(String.valueOf(p));}
-            public void onStartTrackingTouch(SeekBar sb){}
-            public void onStopTrackingTouch(SeekBar sb){}
-        });
-    }
-
-    // ── Manual Override ─────────────────────────────────────────────────────
-
-    /** Scan semua /dev/input/event* via root dan populate spinners */
     private void scanEventPaths() {
+        if (!isShizukuPermissionGranted()) {
+            Toast.makeText(this, "Berikan izin Shizuku dulu!", Toast.LENGTH_LONG).show();
+            return;
+        }
         Toast.makeText(this, "Scanning...", Toast.LENGTH_SHORT).show();
+        if (!bound) { Toast.makeText(this, "Service belum siap", Toast.LENGTH_SHORT).show(); return; }
+        service.scanJoyConPathsAsync();
+        // hasil akan datang via onScanResult callback
+        // untuk manual scan, kita gunakan cara langsung di bawah:
         new Thread(() -> {
-            List<String> found = new ArrayList<>();
-            try {
-                Process proc = Runtime.getRuntime().exec("su");
-                DataOutputStream os = new DataOutputStream(proc.getOutputStream());
-                BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
-                new Thread(() -> {
-                    try (BufferedReader er = new BufferedReader(
-                            new InputStreamReader(proc.getErrorStream()))) {
-                        while (er.readLine() != null) {}
-                    } catch (IOException ignored) {}
-                }).start();
-                os.writeBytes(
-                    "for f in /dev/input/event*; do\n" +
-                    "  name=$(cat /sys/class/input/$(basename $f)/device/name 2>/dev/null)\n" +
-                    "  echo \"$f|$name\"\n" +
-                    "done\n" +
-                    "echo SCAN_DONE\n" +
-                    "exit\n");
-                os.flush();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (line.equals("SCAN_DONE")) break;
-                    found.add(line);
-                }
-                proc.waitFor();
-            } catch (Exception e) {
-                found.add("ERROR|" + e.getMessage());
-            }
-            runOnUiThread(() -> updatePathSpinners(found));
+            if (service == null) return;
+            // Trigger scan dan ambil hasilnya via callback di MergeService
+            // (sudah di-handle di ServiceConnection callback onScanResult)
+            // Untuk populate spinner, kita re-scan lewat service
+            scanPathsForSpinners();
         }).start();
     }
 
-    private void updatePathSpinners(List<String> raw) {
+    private void scanPathsForSpinners() {
+        // Panggil UserService langsung via bound service
+        if (!bound || service == null) return;
+        // Kita minta service scan dan hasilnya via callback
+        // MainActivity daftarkan callback extra untuk scan manual
+        service.setStatusCallback(new MergeService.StatusCallback() {
+            @Override public void onStatus(String msg) {
+                runOnUiThread(() -> handleStatus(msg));
+            }
+            @Override public void onEvent(String event) {
+                runOnUiThread(() -> handleEvent(event));
+            }
+            @Override public void onDevices(String left, String right) {
+                runOnUiThread(() -> tvDevices.setText("L Joy-Con: " + left + "\nR Joy-Con: " + right));
+            }
+            @Override public void onScanResult(List<String> allPaths, String autoLeft, String autoRight) {
+                runOnUiThread(() -> updatePathSpinners(allPaths));
+            }
+        });
+        service.scanJoyConPathsAsync();
+    }
+
+    private void updatePathSpinners(List<String> paths) {
         eventPaths.clear();
-        List<String> labels = new ArrayList<>();
-        for (String entry : raw) {
-            String[] parts = entry.split("\\|", 2);
-            String path = parts[0].trim();
-            String name = parts.length > 1 ? parts[1].trim() : "";
-            eventPaths.add(path);
-            labels.add(path + (name.isEmpty() ? "" : "  [" + name + "]"));
-        }
-        if (eventPaths.isEmpty()) {
-            Toast.makeText(this, "Tidak ada event device ditemukan", Toast.LENGTH_LONG).show();
+        eventPaths.addAll(paths);
+        List<String> labels = new ArrayList<>(paths);
+        if (labels.isEmpty()) {
+            Toast.makeText(this, "Tidak ada Joy-Con event device ditemukan", Toast.LENGTH_LONG).show();
             return;
         }
-        ArrayAdapter<String> adL = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, labels);
+        ArrayAdapter<String> adL = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>(labels));
         adL.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spLeftPath.setAdapter(adL);
         ArrayAdapter<String> adR = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>(labels));
         adR.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spRightPath.setAdapter(adR);
-
-        // Auto-select: entry Joy-Con pertama → L, terakhir → R
         for (int i = 0; i < labels.size(); i++) {
-            if (labels.get(i).toLowerCase().contains("joy")) { spLeftPath.setSelection(i); break; }
+            if (labels.get(i).toLowerCase().contains("left")) { spLeftPath.setSelection(i); break; }
         }
-        for (int i = labels.size() - 1; i >= 0; i--) {
-            if (labels.get(i).toLowerCase().contains("joy")) { spRightPath.setSelection(i); break; }
+        for (int i = labels.size()-1; i >= 0; i--) {
+            if (labels.get(i).toLowerCase().contains("right")) { spRightPath.setSelection(i); break; }
         }
-        Toast.makeText(this,
-            "✓ " + eventPaths.size() + " device. Pilih mana yang L dan R, lalu Start.",
-            Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "✓ " + paths.size() + " device. Pilih L dan R, lalu Start.", Toast.LENGTH_LONG).show();
     }
 
-    // ── Merge control ────────────────────────────────────────────────────────
+    // ─── Merge control ────────────────────────────────────────────────────────
 
     private void toggleMerge() {
         if (bound && service.isMerging()) {
@@ -323,6 +333,11 @@ public class MainActivity extends AppCompatActivity {
             intent.setAction(MergeService.ACTION_STOP);
             startForegroundService(intent);
         } else {
+            if (!isShizukuPermissionGranted()) {
+                Toast.makeText(this, "Berikan izin Shizuku dulu!", Toast.LENGTH_LONG).show();
+                updateShizukuBanner();
+                return;
+            }
             checkPermissionsAndStart();
         }
     }
@@ -383,8 +398,42 @@ public class MainActivity extends AppCompatActivity {
             config.getMapPlus(),config.getMapR3(),
             config.getMapL(),  config.getMapZL(),
             config.getMapMinus(),config.getMapL3(),
-            config.getMapHome(), config.getMapCapture()
-        );
+            config.getMapHome(), config.getMapCapture());
+    }
+
+    // ─── Remap & calib setup ──────────────────────────────────────────────────
+
+    private void setupRemap() {
+        ArrayAdapter<String> ad = new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_item, BTN_NAMES);
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        Spinner[] spinners = {spA,spB,spX,spY,spR,spZR,spPlus,spR3,spL,spZL,spMinus,spL3};
+        int[] defaults = {
+            config.getMapA(), config.getMapB(), config.getMapX(), config.getMapY(),
+            config.getMapR(), config.getMapZR(), config.getMapPlus(), config.getMapR3(),
+            config.getMapL(), config.getMapZL(), config.getMapMinus(), config.getMapL3()
+        };
+        for (int i = 0; i < spinners.length; i++) {
+            spinners[i].setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, BTN_NAMES));
+            spinners[i].getAdapter();
+            spinners[i].setSelection(codeToIdx(defaults[i]));
+        }
+    }
+
+    private void setupCalibrate() {
+        sbFuzz.setMax(1024); sbFuzz.setProgress(config.getFuzz());
+        sbFlat.setMax(16383); sbFlat.setProgress(config.getFlat());
+        tvFuzz.setText("Fuzz: " + config.getFuzz());
+        tvFlat.setText("Flat: " + config.getFlat());
+        sbFuzz.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean f) { tvFuzz.setText("Fuzz: "+p); }
+        });
+        sbFlat.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean f) { tvFlat.setText("Flat: "+p); }
+        });
+        cbInvLX.setChecked(config.getInvLX()); cbInvLY.setChecked(config.getInvLY());
+        cbInvRX.setChecked(config.getInvRX()); cbInvRY.setChecked(config.getInvRY());
     }
 
     private void saveRemap() {
@@ -397,16 +446,12 @@ public class MainActivity extends AppCompatActivity {
             BTN_CODES[spL.getSelectedItemPosition()],BTN_CODES[spZL.getSelectedItemPosition()],
             BTN_CODES[spMinus.getSelectedItemPosition()],BTN_CODES[spL3.getSelectedItemPosition()],
             config.getMapHome(), config.getMapCapture());
-
         if (bound && service.isMerging()) {
             Toast.makeText(this, "Mapping saved — restarting…", Toast.LENGTH_SHORT).show();
             Intent stop = new Intent(this, MergeService.class);
             stop.setAction(MergeService.ACTION_STOP);
             startForegroundService(stop);
-            btnToggle.postDelayed(() -> {
-                applyConfigToService();
-                doStartMerge();
-            }, 600);
+            btnToggle.postDelayed(() -> { applyConfigToService(); doStartMerge(); }, 600);
         } else {
             Toast.makeText(this, "Button mapping saved!", Toast.LENGTH_SHORT).show();
             applyConfigToService();
@@ -424,7 +469,7 @@ public class MainActivity extends AppCompatActivity {
         applyConfigToService();
     }
 
-    // ── Event handling ───────────────────────────────────────────────────────
+    // ─── Event handling ────────────────────────────────────────────────────────
 
     private void handleEvent(String event) {
         if (event == null) return;
@@ -449,8 +494,7 @@ public class MainActivity extends AppCompatActivity {
                     case 4: gamepadView.setStick(false, gamepadView.getRX(), val); break;
                 }
             } else if ("DPAD".equals(parts[0])) {
-                String dir = parts[1];
-                int value = Integer.parseInt(parts[2]);
+                String dir = parts[1]; int value = Integer.parseInt(parts[2]);
                 switch (dir) {
                     case "up":    gamepadView.setButtonPressed(GamepadView.DPAD_UP,    value!=0); break;
                     case "down":  gamepadView.setButtonPressed(GamepadView.DPAD_DOWN,  value!=0); break;
@@ -464,12 +508,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent ev) {
         if ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0) {
-            gamepadView.setStick(true,
-                ev.getAxisValue(MotionEvent.AXIS_X),
-                ev.getAxisValue(MotionEvent.AXIS_Y));
-            gamepadView.setStick(false,
-                ev.getAxisValue(MotionEvent.AXIS_RX),
-                ev.getAxisValue(MotionEvent.AXIS_RY));
+            gamepadView.setStick(true, ev.getAxisValue(MotionEvent.AXIS_X), ev.getAxisValue(MotionEvent.AXIS_Y));
+            gamepadView.setStick(false, ev.getAxisValue(MotionEvent.AXIS_RX), ev.getAxisValue(MotionEvent.AXIS_RY));
             float hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X);
             float hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
             gamepadView.setButtonPressed(GamepadView.DPAD_LEFT,  hx < -0.5f);
@@ -495,29 +535,7 @@ public class MainActivity extends AppCompatActivity {
         return super.dispatchKeyEvent(ev);
     }
 
-    private static String androidKeyToName(int kc) {
-        switch (kc) {
-            case KeyEvent.KEYCODE_BUTTON_A:      return GamepadView.BTN_A;
-            case KeyEvent.KEYCODE_BUTTON_B:      return GamepadView.BTN_B;
-            case KeyEvent.KEYCODE_BUTTON_X:      return GamepadView.BTN_X;
-            case KeyEvent.KEYCODE_BUTTON_Y:      return GamepadView.BTN_Y;
-            case KeyEvent.KEYCODE_BUTTON_L1:     return GamepadView.BTN_L;
-            case KeyEvent.KEYCODE_BUTTON_R1:     return GamepadView.BTN_R;
-            case KeyEvent.KEYCODE_BUTTON_L2:     return GamepadView.BTN_ZL;
-            case KeyEvent.KEYCODE_BUTTON_R2:     return GamepadView.BTN_ZR;
-            case KeyEvent.KEYCODE_BUTTON_START:  return GamepadView.BTN_PLUS;
-            case KeyEvent.KEYCODE_BUTTON_SELECT: return GamepadView.BTN_MINUS;
-            case KeyEvent.KEYCODE_BUTTON_THUMBL: return GamepadView.BTN_L3;
-            case KeyEvent.KEYCODE_BUTTON_THUMBR: return GamepadView.BTN_R3;
-            case KeyEvent.KEYCODE_DPAD_UP:       return GamepadView.DPAD_UP;
-            case KeyEvent.KEYCODE_DPAD_DOWN:     return GamepadView.DPAD_DOWN;
-            case KeyEvent.KEYCODE_DPAD_LEFT:     return GamepadView.DPAD_LEFT;
-            case KeyEvent.KEYCODE_DPAD_RIGHT:    return GamepadView.DPAD_RIGHT;
-            default: return null;
-        }
-    }
-
-    // ── UI helpers ───────────────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private void handleStatus(String msg) {
         tvStatus.setText(msg);
@@ -540,9 +558,51 @@ public class MainActivity extends AppCompatActivity {
         return 0;
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (bound) unbindService(conn);
+    private static String keyCodeToName(int code) {
+        switch (code) {
+            case 0x131: return GamepadView.BTN_A;
+            case 0x130: return GamepadView.BTN_B;
+            case 0x133: return GamepadView.BTN_X;
+            case 0x134: return GamepadView.BTN_Y;
+            case 0x136: return GamepadView.BTN_L;
+            case 0x137: return GamepadView.BTN_R;
+            case 0x138: return GamepadView.BTN_ZL;
+            case 0x139: return GamepadView.BTN_ZR;
+            case 0x13a: return GamepadView.BTN_MINUS;
+            case 0x13b: return GamepadView.BTN_PLUS;
+            case 0x13c: return GamepadView.BTN_HOME;
+            case 0x13d: return GamepadView.BTN_L3;
+            case 0x13e: return GamepadView.BTN_R3;
+            case 0xa7:  return GamepadView.BTN_CAP;
+            default:    return null;
+        }
+    }
+
+    private static String androidKeyToName(int kc) {
+        switch (kc) {
+            case KeyEvent.KEYCODE_BUTTON_A:      return GamepadView.BTN_A;
+            case KeyEvent.KEYCODE_BUTTON_B:      return GamepadView.BTN_B;
+            case KeyEvent.KEYCODE_BUTTON_X:      return GamepadView.BTN_X;
+            case KeyEvent.KEYCODE_BUTTON_Y:      return GamepadView.BTN_Y;
+            case KeyEvent.KEYCODE_BUTTON_L1:     return GamepadView.BTN_L;
+            case KeyEvent.KEYCODE_BUTTON_R1:     return GamepadView.BTN_R;
+            case KeyEvent.KEYCODE_BUTTON_L2:     return GamepadView.BTN_ZL;
+            case KeyEvent.KEYCODE_BUTTON_R2:     return GamepadView.BTN_ZR;
+            case KeyEvent.KEYCODE_BUTTON_START:  return GamepadView.BTN_PLUS;
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return GamepadView.BTN_MINUS;
+            case KeyEvent.KEYCODE_BUTTON_THUMBL: return GamepadView.BTN_L3;
+            case KeyEvent.KEYCODE_BUTTON_THUMBR: return GamepadView.BTN_R3;
+            case KeyEvent.KEYCODE_DPAD_UP:       return GamepadView.DPAD_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN:     return GamepadView.DPAD_DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT:     return GamepadView.DPAD_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:    return GamepadView.DPAD_RIGHT;
+            default: return null;
+        }
+    }
+
+    // Helper class
+    private static abstract class SimpleSeekListener implements SeekBar.OnSeekBarChangeListener {
+        @Override public void onStartTrackingTouch(SeekBar sb) {}
+        @Override public void onStopTrackingTouch(SeekBar sb) {}
     }
 }
